@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>First-Click Viewer</title>
+<script src="lib/sha256.js"></script>
+<script src="lib/canonical.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f7;
+    color: #111;
+    min-height: 100vh;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+
+  /* Header */
+  #header {
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  #header h1 { font-size: 18px; font-weight: 700; color: #111; }
+  #load-btn {
+    margin-left: auto;
+    padding: 8px 18px;
+    background: #4f8ef7;
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #load-btn:hover { background: #3a7ae0; }
+  #file-input { display: none; }
+
+  /* Main layout */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Sidebar */
+  #sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: #fff;
+    border-right: 1px solid #e0e0e0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  #sidebar-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid #eee;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #888;
+  }
+  .session-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid #f0f0f0;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .session-item:hover { background: #f8f8f8; }
+  .session-item.active { background: #eef3ff; }
+  .session-name { font-size: 14px; font-weight: 600; color: #111; margin-bottom: 3px; }
+  .session-meta { font-size: 12px; color: #888; }
+  .validity-badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 100px;
+    margin-top: 5px;
+    font-weight: 500;
+  }
+  .badge-valid { background: #e6f9ee; color: #1a8040; }
+  .badge-invalid { background: #fff3e0; color: #b84800; }
+
+  /* Drop zone */
+  #drop-zone {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed #ccc;
+    border-radius: 16px;
+    margin: 40px;
+    color: #aaa;
+    text-align: center;
+    transition: border-color 0.15s, background 0.15s;
+    cursor: pointer;
+  }
+  #drop-zone.drag-over { border-color: #4f8ef7; background: #eef3ff; color: #4f8ef7; }
+  #drop-zone-icon { font-size: 48px; margin-bottom: 16px; }
+  #drop-zone h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; color: #555; }
+  #drop-zone p { font-size: 14px; color: #aaa; }
+
+  /* Viewer area */
+  #viewer-area {
+    flex: 1;
+    overflow: auto;
+    padding: 24px;
+    display: none;
+  }
+  #viewer-area.visible { display: block; }
+
+  /* Screenshot container */
+  #screenshot-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+    border-radius: 4px;
+    overflow: hidden;
+    background: #eee;
+  }
+  #screenshot-img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Hotspot */
+  .hotspot {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    cursor: pointer;
+    z-index: 10;
+  }
+  .hotspot svg { display: block; overflow: visible; }
+  .hotspot .ring {
+    fill: none;
+    stroke: #e53935;
+    stroke-width: 2.5;
+    opacity: 0.85;
+  }
+  .hotspot .dot {
+    fill: #e53935;
+    opacity: 0.9;
+  }
+  .hotspot.dim .ring { stroke: #aaa; opacity: 0.4; }
+  .hotspot.dim .dot { fill: #aaa; opacity: 0.4; }
+  .hotspot.active .ring { stroke: #1565c0; opacity: 1; }
+  .hotspot.active .dot { fill: #1565c0; opacity: 1; }
+
+  /* Tooltip */
+  .tooltip {
+    position: absolute;
+    background: rgba(20,20,30,0.92);
+    color: #fff;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translate(-50%, calc(-100% - 14px));
+    left: 50%;
+    top: 0;
+    display: none;
+    z-index: 20;
+    max-width: 260px;
+    white-space: normal;
+  }
+  .hotspot:hover .tooltip { display: block; }
+  .tooltip strong { display: block; margin-bottom: 3px; font-size: 13px; }
+
+  /* Empty state for viewer */
+  #viewer-empty {
+    padding: 60px 24px;
+    text-align: center;
+    color: #aaa;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1>First-Click Viewer</h1>
+    <button id="load-btn">Load .fct files</button>
+    <input type="file" id="file-input" accept=".fct" multiple>
+  </div>
+  <div id="main">
+    <div id="sidebar">
+      <div id="sidebar-header">Sessions (<span id="session-count">0</span>)</div>
+      <div id="session-list"></div>
+    </div>
+    <div id="drop-zone">
+      <div id="drop-zone-icon">📂</div>
+      <h2>Drop .fct files here</h2>
+      <p>Or click "Load .fct files" above</p>
+    </div>
+    <div id="viewer-area">
+      <div id="screenshot-wrap">
+        <img id="screenshot-img" alt="Prototype screenshot">
+      </div>
+      <div id="viewer-empty" style="display:none">No screenshot available for this session.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var SECRET = 'TRACKER_SECRET_v1';
+
+  // All sessions after deduplication (keyed by testerName, earliest wins)
+  var sessionsByName = {};  // testerName -> session object
+  var allSessions = [];     // ordered list of deduplicated sessions
+  var activeSessionId = null;
+
+  /* ---- DOM refs ---- */
+  var dropZone = document.getElementById('drop-zone');
+  var viewerArea = document.getElementById('viewer-area');
+  var screenshotWrap = document.getElementById('screenshot-wrap');
+  var screenshotImg = document.getElementById('screenshot-img');
+  var sessionList = document.getElementById('session-list');
+  var sessionCount = document.getElementById('session-count');
+  var fileInput = document.getElementById('file-input');
+  var loadBtn = document.getElementById('load-btn');
+
+  /* ---- Drag and drop ---- */
+  dropZone.addEventListener('click', function () { fileInput.click(); });
+  loadBtn.addEventListener('click', function () { fileInput.click(); });
+
+  document.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+  document.addEventListener('dragleave', function (e) {
+    if (!e.relatedTarget) dropZone.classList.remove('drag-over');
+  });
+  document.addEventListener('drop', function (e) {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    handleFiles(e.dataTransfer.files);
+  });
+
+  fileInput.addEventListener('change', function () {
+    handleFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  /* ---- File handling ---- */
+  function handleFiles(files) {
+    var arr = Array.prototype.slice.call(files);
+    arr.forEach(function (file) {
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        processFileContent(e.target.result);
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  function processFileContent(text) {
+    var session;
+    try {
+      // Content is base64 encoded
+      var jsonStr = atob64(text.trim());
+      session = JSON.parse(jsonStr);
+    } catch (err) {
+      alert('Could not parse file: ' + err.message);
+      return;
+    }
+
+    // Verify integrity
+    var valid = verifySession(session);
+    session.__valid = valid;
+    session.__id = session.sessionId;
+
+    // Deduplication: keep earliest per testerName
+    var nameKey = session.testerName || '__anonymous__';
+    var existing = sessionsByName[nameKey];
+    if (existing) {
+      if (session.sessionStart.wallMs < existing.sessionStart.wallMs) {
+        // Replace with earlier attempt
+        sessionsByName[nameKey] = session;
+        var idx = allSessions.indexOf(existing);
+        if (idx !== -1) allSessions[idx] = session;
+      }
+      // else discard this one as later attempt
+    } else {
+      sessionsByName[nameKey] = session;
+      allSessions.push(session);
+    }
+
+    renderSidebar();
+    if (!activeSessionId) {
+      activateSession(session.__id);
+    } else {
+      renderViewer();
+    }
+  }
+
+  function atob64(b64) {
+    var binary = atob(b64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return decodeURIComponent(escape(String.fromCharCode.apply(null, bytes)));
+  }
+
+  function verifySession(session) {
+    try {
+      var storedSig = session.integrity && session.integrity.sig;
+      if (!storedSig) return false;
+
+      // Build data object without integrity field
+      var data = {
+        schemaVersion: session.schemaVersion,
+        sessionId: session.sessionId,
+        testerName: session.testerName,
+        sessionStart: session.sessionStart,
+        click: session.click,
+        screenshot: session.screenshot
+      };
+
+      var expected = sha256hex(canonicalJSON(data) + '|' + SECRET);
+      return expected === storedSig;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ---- Sidebar rendering ---- */
+  function renderSidebar() {
+    sessionCount.textContent = allSessions.length;
+    sessionList.innerHTML = '';
+    allSessions.forEach(function (s) {
+      var item = document.createElement('div');
+      item.className = 'session-item' + (s.__id === activeSessionId ? ' active' : '');
+      item.setAttribute('data-id', s.__id);
+
+      var name = document.createElement('div');
+      name.className = 'session-name';
+      name.textContent = s.testerName || '(anonymous)';
+
+      var meta = document.createElement('div');
+      meta.className = 'session-meta';
+      var ttc = s.click && s.click.timeToClickMs;
+      meta.textContent = ttc != null ? formatMs(ttc) + ' to first click' : 'No click recorded';
+
+      var badge = document.createElement('div');
+      badge.className = 'validity-badge ' + (s.__valid ? 'badge-valid' : 'badge-invalid');
+      badge.textContent = s.__valid ? '✓ Valid' : '⚠ Signature mismatch';
+
+      item.appendChild(name);
+      item.appendChild(meta);
+      item.appendChild(badge);
+      item.addEventListener('click', function () { activateSession(s.__id); });
+      sessionList.appendChild(item);
+    });
+  }
+
+  function formatMs(ms) {
+    if (ms < 1000) return ms + 'ms';
+    return (ms / 1000).toFixed(1) + 's';
+  }
+
+  /* ---- Activate a session ---- */
+  function activateSession(id) {
+    activeSessionId = id;
+    renderSidebar();
+    renderViewer();
+    dropZone.style.display = 'none';
+    viewerArea.classList.add('visible');
+  }
+
+  /* ---- Viewer rendering ---- */
+  function renderViewer() {
+    // Clear existing hotspots
+    var existing = screenshotWrap.querySelectorAll('.hotspot');
+    existing.forEach(function (el) { el.parentNode.removeChild(el); });
+
+    var active = allSessions.filter(function (s) { return s.__id === activeSessionId; })[0];
+    if (!active) return;
+
+    var screenshot = active.screenshot;
+    if (!screenshot || !screenshot.dataURI) {
+      screenshotImg.style.display = 'none';
+      document.getElementById('viewer-empty').style.display = 'block';
+      return;
+    }
+
+    document.getElementById('viewer-empty').style.display = 'none';
+    screenshotImg.style.display = 'block';
+    screenshotImg.src = screenshot.dataURI;
+
+    // Render all sessions' hotspots on this screenshot
+    allSessions.forEach(function (s) {
+      if (!s.click) return;
+      var hotspot = createHotspot(s, s.__id === activeSessionId);
+      screenshotWrap.appendChild(hotspot);
+    });
+  }
+
+  function createHotspot(session, isActive) {
+    var click = session.click;
+    var xPct = click.xPct;
+    var yPct = click.yPct;
+
+    var el = document.createElement('div');
+    el.className = 'hotspot' + (isActive ? ' active' : ' dim');
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+
+    // SVG ring + dot
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '40');
+    svg.setAttribute('height', '40');
+    svg.setAttribute('viewBox', '-20 -20 40 40');
+
+    var ring = document.createElementNS(svgNS, 'circle');
+    ring.setAttribute('cx', '0');
+    ring.setAttribute('cy', '0');
+    ring.setAttribute('r', '14');
+    ring.setAttribute('class', 'ring');
+
+    var dot = document.createElementNS(svgNS, 'circle');
+    dot.setAttribute('cx', '0');
+    dot.setAttribute('cy', '0');
+    dot.setAttribute('r', '4');
+    dot.setAttribute('class', 'dot');
+
+    svg.appendChild(ring);
+    svg.appendChild(dot);
+
+    // Tooltip
+    var tooltip = document.createElement('div');
+    tooltip.className = 'tooltip';
+
+    var nameEl = document.createElement('strong');
+    nameEl.textContent = session.testerName || '(anonymous)';
+    tooltip.appendChild(nameEl);
+
+    var lines = [
+      'Time to click: ' + formatMs(click.timeToClickMs),
+      'Element: ' + (click.targetSelector || 'unknown'),
+      click.targetText ? 'Text: "' + click.targetText.slice(0, 60) + '"' : ''
+    ];
+    lines.forEach(function (line) {
+      if (!line) return;
+      var span = document.createElement('div');
+      span.textContent = line;
+      tooltip.appendChild(span);
+    });
+
+    el.appendChild(svg);
+    el.appendChild(tooltip);
+
+    el.addEventListener('click', function (e) {
+      e.stopPropagation();
+      activateSession(session.__id);
+    });
+
+    return el;
+  }
+
+}());
+</script>
+</body>
+</html>

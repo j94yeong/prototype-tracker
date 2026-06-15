@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>First-Click Tracker — Setup Instructions</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f7;
+    color: #111;
+    padding: 48px 24px;
+    max-width: 760px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+  .subtitle { color: #666; margin-bottom: 40px; font-size: 16px; }
+  h2 { font-size: 18px; font-weight: 700; margin: 32px 0 12px 0; }
+  p { color: #444; margin-bottom: 12px; }
+  ol { color: #444; padding-left: 20px; }
+  ol li { margin-bottom: 8px; }
+  .step {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 20px;
+  }
+  .step-num {
+    display: inline-block;
+    background: #4f8ef7;
+    color: #fff;
+    border-radius: 50%;
+    width: 26px;
+    height: 26px;
+    text-align: center;
+    line-height: 26px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 10px;
+    flex-shrink: 0;
+  }
+  .step-title {
+    font-weight: 700;
+    font-size: 16px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+  }
+  pre {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-size: 13px;
+    overflow-x: auto;
+    margin: 12px 0 4px 0;
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    line-height: 1.6;
+  }
+  code {
+    background: #eef0f8;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 13px;
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    color: #c0392b;
+  }
+  .file-tree {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-size: 13px;
+    font-family: "SF Mono", "Fira Code", Consolas, monospace;
+    line-height: 1.8;
+    margin: 12px 0;
+  }
+  .file-tree .dir { color: #89b4fa; }
+  .file-tree .file { color: #a6e3a1; }
+  .file-tree .comment { color: #6c7086; }
+  .note {
+    background: #fff8e1;
+    border-left: 4px solid #f9a825;
+    border-radius: 4px;
+    padding: 12px 16px;
+    font-size: 14px;
+    color: #555;
+    margin-top: 12px;
+  }
+  .note strong { color: #e65100; }
+</style>
+</head>
+<body>
+<h1>First-Click Tracker</h1>
+<p class="subtitle">A local-only, no-cloud first-click test harness for HTML prototypes.</p>
+
+<h2>Quick Setup (3 steps)</h2>
+
+<div class="step">
+  <div class="step-title"><span class="step-num">1</span>Copy the tracker files alongside your prototype</div>
+  <p>Your prototype folder should look like this:</p>
+  <div class="file-tree">
+<span class="dir">my-prototype/</span>
+  <span class="file">your-prototype.html</span>   <span class="comment">&lt;-- your existing file</span>
+  <span class="dir">lib/</span>
+    <span class="file">sha256.js</span>
+    <span class="file">canonical.js</span>
+    <span class="file">html2canvas.min.js</span>
+  <span class="file">tracker.js</span>
+  </div>
+  <p>Copy the <code>lib/</code> folder and <code>tracker.js</code> from the tracker package into your prototype folder.</p>
+</div>
+
+<div class="step">
+  <div class="step-title"><span class="step-num">2</span>Add this snippet before <code>&lt;/body&gt;</code> in your prototype HTML</div>
+  <pre>&lt;!-- First-Click Tracker --&gt;
+&lt;script src="lib/sha256.js"&gt;&lt;/script&gt;
+&lt;script src="lib/canonical.js"&gt;&lt;/script&gt;
+&lt;script src="lib/html2canvas.min.js"&gt;&lt;/script&gt;
+&lt;script src="tracker.js"&gt;&lt;/script&gt;
+&lt;!-- End First-Click Tracker --&gt;</pre>
+  <div class="note"><strong>Note:</strong> The paths assume <code>tracker.js</code> and <code>lib/</code> sit in the same folder as your HTML file. Adjust if your folder structure differs.</div>
+</div>
+
+<div class="step">
+  <div class="step-title"><span class="step-num">3</span>Zip it and send to testers</div>
+  <ol>
+    <li>Zip the entire <code>my-prototype/</code> folder.</li>
+    <li>Send the zip to your tester.</li>
+    <li>They unzip it and double-click <code>your-prototype.html</code> to open it in their browser.</li>
+    <li>They see a "First-Click Test" overlay — they enter their name (optional) and click Start.</li>
+    <li>They click the first thing they'd naturally interact with.</li>
+    <li>A <code>session_XXXXXXXX.fct</code> file downloads automatically.</li>
+    <li>They send the <code>.fct</code> file back to you.</li>
+  </ol>
+</div>
+
+<h2>Reviewing Results</h2>
+
+<div class="step">
+  <div class="step-title">Open <code>viewer.html</code> in your browser</div>
+  <ol>
+    <li>Double-click <code>viewer.html</code> (it's in the tracker package root).</li>
+    <li>Drag and drop all the <code>.fct</code> files you received from testers onto the viewer, or use "Load .fct files".</li>
+    <li>Each session appears in the sidebar with its tester name, time-to-click, and a validity flag.</li>
+    <li>The screenshot shows hotspot rings where each tester clicked.</li>
+    <li>Hover a hotspot to see tester name, element, text, and time-to-click.</li>
+    <li>Click a session in the sidebar (or a hotspot) to highlight it.</li>
+  </ol>
+  <div class="note">
+    <strong>Validity flags:</strong> ✓ Valid means the file's signature matches. ⚠ Signature mismatch means the file was modified after capture (or opened from a different tracker version). These are advisory — you decide whether to trust the session.
+  </div>
+</div>
+
+<h2>Notes</h2>
+<ul style="color:#444; padding-left: 20px;">
+  <li style="margin-bottom:8px;">Everything runs locally — no data leaves the tester's machine except the <code>.fct</code> file they send you.</li>
+  <li style="margin-bottom:8px;">Works offline. No internet connection required.</li>
+  <li style="margin-bottom:8px;">The tracker captures a screenshot of the page <em>before</em> the tester clicks, so you see exactly what they saw.</li>
+  <li style="margin-bottom:8px;">If multiple files come from the same tester name, the viewer keeps only the earliest attempt.</li>
+</ul>
+</body>
+</html>
