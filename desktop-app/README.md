@@ -54,6 +54,18 @@ No code signing certificates are configured. Unsigned builds will trigger
 Gatekeeper / SmartScreen warnings on first launch — that's expected for an
 internal tool without a paid signing certificate.
 
+### CI builds (GitHub Actions)
+
+`.github/workflows/build-desktop-app.yml` builds both the macOS `.dmg` and
+Windows `.exe` on their respective native runners, so you don't need either
+machine yourself.
+
+- **Tag push** (`git tag v1.0.0 && git push --tags`) — builds both installers
+  and attaches them to a new GitHub Release automatically.
+- **Manual run** — trigger it from the Actions tab ("Run workflow") to get
+  build artifacts without cutting a release; they're attached to the run as
+  downloadable artifacts.
+
 ## How schema compatibility is preserved
 
 - `lib/sha256.js` and `lib/canonical.js` in `desktop-app/lib/` are thin
