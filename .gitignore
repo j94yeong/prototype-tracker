@@ -1,0 +1,3 @@
+node_modules/
+desktop-app/dist/
+.DS_Store

@@ -1,0 +1,49 @@
+{
+  "name": "first-click-tracker-desktop",
+  "version": "1.0.0",
+  "description": "Native desktop app that loads a prototype's index.html, captures the first click, and exports a signed .fct session file compatible with the existing viewer.html.",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder --mac --win",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.prototypetracker.app",
+    "productName": "First Click Tracker",
+    "files": [
+      "main.js",
+      "preload-app.js",
+      "preload-target.js",
+      "renderer/**/*",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../lib",
+        "to": "shared-lib"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
