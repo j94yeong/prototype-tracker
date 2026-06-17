@@ -30,6 +30,32 @@ let sessionId = null;
 let testerName = '';
 let sessionStart = null; // { wallMs, perfMs }
 let screenshotData = null; // { dataURI, width, height, dpr }
+let pageName = '';
+let captured = false; // ensures exactly one capture per session
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/* ---- Build a friendly default filename: tester_page_YYYYMMDD_HHMM.fct ---- */
+function slug(s) {
+  return (s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30);
+}
+
+function buildFilename(tester, page, wallMs) {
+  const d = new Date(wallMs || Date.now());
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = '' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate());
+  const time = pad(d.getHours()) + pad(d.getMinutes());
+  const t = slug(tester) || 'anonymous';
+  const p = slug(page) || 'prototype';
+  return t + '_' + p + '_' + date + '_' + time + '.fct';
+}
 
 /* ---- UUID v4, identical algorithm to tracker.js so format matches ---- */
 function uuidv4() {
@@ -79,6 +105,8 @@ function resetSessionState() {
   testerName = '';
   sessionStart = null;
   screenshotData = null;
+  pageName = '';
+  captured = false;
 }
 
 function sendStatus(message, extra) {
@@ -87,10 +115,51 @@ function sendStatus(message, extra) {
   }
 }
 
-/* ---- Shared: open a fresh target BrowserWindow and arm it ---- */
-function openTargetWindow(loadFn, testerNameValue) {
+/* ---- Figma (or any cross-origin iframe) capture: the in-page preload
+ * click listener can't see clicks inside a cross-origin iframe, so we
+ * listen for the raw mouse event at the webContents level instead. This
+ * gives coordinates but no DOM selector/text (impossible cross-origin). ---- */
+function installFigmaCapture(wc) {
+  const handler = async (event, input) => {
+    if (captured) return;
+    if (input.type !== 'mouseUp' || input.button !== 'left') return;
+    captured = true;
+    try { wc.removeListener('input-event', handler); } catch (e) { /* noop */ }
+
+    const wallMs = Date.now();
+    let perfMs = 0, vw = 0, vh = 0;
+    try {
+      const m = await wc.executeJavaScript(
+        'JSON.stringify({p:performance.now(),w:window.innerWidth,h:window.innerHeight})'
+      );
+      const o = JSON.parse(m);
+      perfMs = o.p; vw = o.w; vh = o.h;
+    } catch (e) { /* best effort */ }
+
+    const x = input.x;
+    const y = input.y;
+    finalizeCapture({
+      wallMs: wallMs,
+      perfMs: perfMs,
+      x: x,
+      y: y,
+      xPct: vw ? (x / vw) * 100 : 0,
+      yPct: vh ? (y / vh) * 100 : 0,
+      viewportW: vw,
+      viewportH: vh,
+      targetSelector: 'figma-prototype',
+      targetText: ''
+    });
+  };
+  wc.on('input-event', handler);
+}
+
+/* ---- Shared: open a fresh target BrowserWindow and arm it ----
+ * mode: 'file' | 'url' | 'figma' */
+function openTargetWindow(loadFn, testerNameValue, mode) {
   resetSessionState();
   testerName = testerNameValue || '';
+  mode = mode || 'file';
 
   if (targetWindow && !targetWindow.isDestroyed()) {
     targetWindow.close();
@@ -111,12 +180,23 @@ function openTargetWindow(loadFn, testerNameValue) {
 
   targetWindow.setMenuBarVisibility(false);
 
+  sendStatus('Loading prototype…', { loading: true });
+
   targetWindow.webContents.once('did-finish-load', async () => {
     try {
+      // Figma renders its prototype asynchronously after the page loads,
+      // so give it a moment before screenshotting / arming.
+      if (mode === 'figma') {
+        sendStatus('Preparing Figma prototype… (a few seconds)', { loading: true });
+        await delay(3000);
+      }
+      if (!targetWindow || targetWindow.isDestroyed()) return;
+
       const wallMs = Date.now();
       const perfMs = await targetWindow.webContents.executeJavaScript('performance.now()');
       sessionId = uuidv4();
       sessionStart = { wallMs: wallMs, perfMs: perfMs };
+      pageName = targetWindow.webContents.getTitle() || '';
 
       const image = await targetWindow.webContents.capturePage();
       const size = image.getSize();
@@ -129,10 +209,14 @@ function openTargetWindow(loadFn, testerNameValue) {
         dpr: dpr
       };
 
-      targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
-      sendStatus('Loaded. Waiting for first click in the prototype window...');
+      if (mode === 'figma') {
+        installFigmaCapture(targetWindow.webContents);
+      } else {
+        targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
+      }
+      sendStatus('Ready — make your first click in the prototype window.', { armed: true });
     } catch (err) {
-      sendStatus('Error preparing session: ' + err.message);
+      sendStatus('Error preparing session: ' + err.message, { error: true });
     }
   });
 
@@ -165,12 +249,12 @@ ipcMain.handle('load-prototype', async (event, payload) => {
     } else {
       win.loadURL(url.format({ pathname: filePath, protocol: 'file:', slashes: true }));
     }
-  }, (payload && payload.testerName) || '');
+  }, (payload && payload.testerName) || '', 'file');
 
   return { ok: true };
 });
 
-/* ---- Load a prototype via URL (localhost, Figma, any live URL) ---- */
+/* ---- Load a prototype via URL (localhost, any live web page) ---- */
 ipcMain.handle('load-prototype-url', async (event, payload) => {
   const protoUrl = payload && payload.url;
 
@@ -180,13 +264,35 @@ ipcMain.handle('load-prototype-url', async (event, payload) => {
 
   openTargetWindow(function (win) {
     win.loadURL(protoUrl.trim());
-  }, (payload && payload.testerName) || '');
+  }, (payload && payload.testerName) || '', 'url');
 
   return { ok: true };
 });
 
-/* ---- Receive the first click from preload-target.js ---- */
+/* ---- Load a Figma prototype (cross-origin iframe; OS-level click capture) ---- */
+ipcMain.handle('load-prototype-figma', async (event, payload) => {
+  const protoUrl = payload && payload.url;
+
+  if (!protoUrl || !/^https?:\/\/.*figma\.com\/.+/.test(protoUrl.trim())) {
+    return { ok: false, error: 'Please enter a valid Figma link (figma.com/proto/... or /file/...).' };
+  }
+
+  openTargetWindow(function (win) {
+    win.loadURL(protoUrl.trim());
+  }, (payload && payload.testerName) || '', 'figma');
+
+  return { ok: true };
+});
+
+/* ---- Receive the first click from preload-target.js (file/url modes) ---- */
 ipcMain.on('first-click-captured', (event, clickInfo) => {
+  if (captured) return;
+  captured = true;
+  finalizeCapture(clickInfo);
+});
+
+/* ---- Build + sign + save the session from a captured click ---- */
+function finalizeCapture(clickInfo) {
   if (!sessionStart || !sessionId) {
     return; // stray event, ignore
   }
@@ -232,13 +338,13 @@ ipcMain.on('first-click-captured', (event, clickInfo) => {
 
     const jsonStr = JSON.stringify(data);
     const b64 = btoa64(jsonStr);
-    const defaultFilename = 'session_' + sessionId.replace(/-/g, '').slice(0, 8) + '.fct';
+    const defaultFilename = buildFilename(testerName, pageName, clickInfo.wallMs);
 
     saveFctFile(b64, defaultFilename);
   } catch (err) {
-    sendStatus('Error capturing click: ' + err.message);
+    sendStatus('Error capturing click: ' + err.message, { error: true });
   }
-});
+}
 
 async function saveFctFile(b64Content, defaultFilename) {
   if (!appWindow || appWindow.isDestroyed()) return;

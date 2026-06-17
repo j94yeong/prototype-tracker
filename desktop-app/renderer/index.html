@@ -101,15 +101,35 @@
   #load-url-btn:hover { background: #3a7ae0; }
   #load-url-btn:disabled { background: #bcd2f5; cursor: not-allowed; }
 
+  #load-figma-btn { background: #4f8ef7; color: #fff; }
+  #load-figma-btn:hover { background: #3a7ae0; }
+  #load-figma-btn:disabled { background: #bcd2f5; cursor: not-allowed; }
+
   #reset-btn { background: #eee; color: #333; display: none; }
   #reset-btn:hover { background: #ddd; }
 
-  #status {
+  #status-row {
     margin-top: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 18px;
+  }
+  #spinner {
+    width: 14px; height: 14px;
+    border: 2px solid #cdd9ee;
+    border-top-color: #4f8ef7;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+    flex-shrink: 0;
+  }
+  #spinner.show { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #status {
     font-size: 13px;
     color: #555;
     line-height: 1.5;
-    min-height: 18px;
   }
   #status.success { color: #1a8040; font-weight: 600; }
   #status.error { color: #c0392b; }
@@ -123,6 +143,7 @@
     <div id="tabs">
       <button class="tab-btn active" data-tab="file">File / Image</button>
       <button class="tab-btn" data-tab="url">URL / Localhost</button>
+      <button class="tab-btn" data-tab="figma">Figma</button>
     </div>
 
     <!-- File panel -->
@@ -151,8 +172,25 @@
       <button id="load-url-btn" disabled>Load Prototype</button>
     </div>
 
-    <button id="reset-btn">Load another prototype</button>
-    <div id="status"></div>
+    <!-- Figma panel -->
+    <div id="panel-figma" class="panel">
+      <div id="url-hint">
+        Paste a <strong>Figma prototype share link</strong>.<br>
+        Set the share to "Anyone with the link can view" first, or you'll hit a login wall.<br>
+        Note: clicks inside Figma are captured by position only (no element name) — that's a browser security limit.
+      </div>
+      <label for="figma-url">Figma link</label>
+      <input type="text" id="figma-url" placeholder="https://www.figma.com/proto/...">
+      <label for="tester-name-figma">Tester name (optional)</label>
+      <input type="text" id="tester-name-figma" placeholder="e.g. Jane Smith">
+      <button id="load-figma-btn" disabled>Load Prototype</button>
+    </div>
+
+    <button id="reset-btn">Close prototype window</button>
+    <div id="status-row">
+      <div id="spinner"></div>
+      <div id="status"></div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>
