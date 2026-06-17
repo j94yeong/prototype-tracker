@@ -115,32 +115,34 @@ function sendStatus(message, extra) {
   }
 }
 
-/* ---- Figma (or any cross-origin iframe) capture: the in-page preload
- * click listener can't see clicks inside a cross-origin iframe, so we
- * listen for the raw mouse event at the webContents level instead. This
- * gives coordinates but no DOM selector/text (impossible cross-origin). ---- */
+/* ---- Figma (or any cross-origin iframe) capture ----
+ * Clicks inside a cross-origin iframe (how Figma embeds its prototype) are
+ * routed to a separate renderer process, so neither the in-page preload's
+ * document listener nor the webContents 'input-event' reliably sees them.
+ *
+ * Instead we inject a transparent full-window overlay into the TOP frame
+ * (figma.com itself, same-origin to executeJavaScript). The overlay sits
+ * above the iframe, so the tester's first click lands on it — giving us
+ * window-relative coordinates that line up exactly with the start-state
+ * screenshot. The overlay reports the click by stamping document.title,
+ * which fires 'page-title-updated' on the webContents. For a first-click
+ * test, swallowing that single click is fine — the test ends on it anyway. */
+const FIGMA_CLICK_PREFIX = '__FCT_CLICK__';
+
 function installFigmaCapture(wc) {
-  const handler = async (event, input) => {
+  const titleHandler = (event, title) => {
     if (captured) return;
-    if (input.type !== 'mouseUp' || input.button !== 'left') return;
+    if (typeof title !== 'string' || title.indexOf(FIGMA_CLICK_PREFIX) !== 0) return;
     captured = true;
-    try { wc.removeListener('input-event', handler); } catch (e) { /* noop */ }
+    try { wc.removeListener('page-title-updated', titleHandler); } catch (e) { /* noop */ }
 
-    const wallMs = Date.now();
-    let perfMs = 0, vw = 0, vh = 0;
-    try {
-      const m = await wc.executeJavaScript(
-        'JSON.stringify({p:performance.now(),w:window.innerWidth,h:window.innerHeight})'
-      );
-      const o = JSON.parse(m);
-      perfMs = o.p; vw = o.w; vh = o.h;
-    } catch (e) { /* best effort */ }
+    let info = {};
+    try { info = JSON.parse(title.slice(FIGMA_CLICK_PREFIX.length)); } catch (e) { /* noop */ }
 
-    const x = input.x;
-    const y = input.y;
+    const x = info.x || 0, y = info.y || 0, vw = info.w || 0, vh = info.h || 0;
     finalizeCapture({
-      wallMs: wallMs,
-      perfMs: perfMs,
+      wallMs: Date.now(),
+      perfMs: info.t || 0,
       x: x,
       y: y,
       xPct: vw ? (x / vw) * 100 : 0,
@@ -151,7 +153,22 @@ function installFigmaCapture(wc) {
       targetText: ''
     });
   };
-  wc.on('input-event', handler);
+  wc.on('page-title-updated', titleHandler);
+
+  const inject =
+    '(function(){' +
+    'var ov=document.createElement("div");' +
+    'ov.style.cssText="position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;cursor:crosshair;background:transparent";' +
+    'ov.addEventListener("click",function(e){' +
+    'var d={x:e.clientX,y:e.clientY,w:window.innerWidth,h:window.innerHeight,t:performance.now()};' +
+    'document.title="' + FIGMA_CLICK_PREFIX + '"+JSON.stringify(d);' +
+    'if(ov.parentNode)ov.parentNode.removeChild(ov);' +
+    '},{once:true,capture:true});' +
+    '(document.body||document.documentElement).appendChild(ov);' +
+    'return true;})();';
+  wc.executeJavaScript(inject).catch(() => {
+    sendStatus('Could not arm Figma capture in the page.', { error: true });
+  });
 }
 
 /* ---- Shared: open a fresh target BrowserWindow and arm it ----
@@ -182,14 +199,18 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
 
   sendStatus('Loading prototype…', { loading: true });
 
-  targetWindow.webContents.once('did-finish-load', async () => {
+  let armed = false;
+  async function arm() {
+    if (armed) return;
+    armed = true;
     try {
-      // Figma renders its prototype asynchronously after the page loads,
-      // so give it a moment before screenshotting / arming.
+      // Settle delay: Figma renders its prototype asynchronously well after
+      // the DOM is ready; other pages just need a short paint settle.
+      const settle = (mode === 'figma') ? 3000 : 400;
       if (mode === 'figma') {
         sendStatus('Preparing Figma prototype… (a few seconds)', { loading: true });
-        await delay(3000);
       }
+      await delay(settle);
       if (!targetWindow || targetWindow.isDestroyed()) return;
 
       const wallMs = Date.now();
@@ -218,7 +239,12 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
     } catch (err) {
       sendStatus('Error preparing session: ' + err.message, { error: true });
     }
-  });
+  }
+
+  // dom-ready fires as soon as the document is interactive — sooner than
+  // did-finish-load (which waits for every sub-resource), so the window arms
+  // promptly instead of feeling laggy on heavier pages.
+  targetWindow.webContents.once('dom-ready', arm);
 
   // If the page can't load (offline, wrong port, bad/dead link), report it
   // instead of leaving the spinner running forever. Main-frame errors only;
