@@ -228,6 +228,8 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
         '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
         'if(o)o.style.opacity="0";return true;})();'
       );
+      // Give the browser one paint cycle to apply opacity:0 before screenshot.
+      await new Promise(r => setTimeout(r, 80));
 
       const image = await targetWindow.webContents.capturePage();
       const size = image.getSize();
