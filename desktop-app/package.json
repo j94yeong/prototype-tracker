@@ -1,6 +1,6 @@
 {
   "name": "first-click-tracker-desktop",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "Native desktop app that loads a prototype's index.html, captures the first click, and exports a signed .fct session file compatible with the existing viewer.html.",
   "main": "main.js",
   "private": true,

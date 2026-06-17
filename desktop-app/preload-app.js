@@ -7,8 +7,10 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const appVersion = require('./package.json').version;
 
 contextBridge.exposeInMainWorld('fctApi', {
+  version: appVersion,
   pickPrototypeFile: () => ipcRenderer.invoke('pick-prototype-file'),
   loadPrototype: (filePath, testerName) =>
     ipcRenderer.invoke('load-prototype', { filePath: filePath, testerName: testerName }),
