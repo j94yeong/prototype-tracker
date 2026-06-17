@@ -261,6 +261,9 @@ async function saveFctFile(b64Content, defaultFilename) {
   sendStatus('Click captured — saved as ' + savedName, { done: true, filename: savedName });
 }
 
+/* ---- IPC: app version (read from package.json by main, not sandboxed) ---- */
+ipcMain.handle('get-version', () => app.getVersion());
+
 /* ---- IPC: open file picker for index.html ---- */
 ipcMain.handle('pick-prototype-file', async () => {
   if (!appWindow) return { canceled: true };

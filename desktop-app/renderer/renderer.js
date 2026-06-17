@@ -20,10 +20,12 @@
 
   var selectedFilePath = null;
 
-  /* ---- Show app version in header ---- */
+  /* ---- Show app version in header (best-effort; never block listeners) ---- */
   var versionEl = document.getElementById('app-version');
-  if (versionEl && window.fctApi.version) {
-    versionEl.textContent = 'v' + window.fctApi.version;
+  if (versionEl && window.fctApi && window.fctApi.getVersion) {
+    window.fctApi.getVersion().then(function (v) {
+      if (v) versionEl.textContent = 'v' + v;
+    }).catch(function () { /* ignore */ });
   }
 
   /* ---- Tab switching ---- */
