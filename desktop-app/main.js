@@ -220,9 +220,33 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
     }
   });
 
+  // If the page can't load (offline, wrong port, bad/dead link), report it
+  // instead of leaving the spinner running forever. Main-frame errors only;
+  // ignore sub-resource failures and user-initiated aborts (code -3).
+  let loadFailed = false;
+  targetWindow.webContents.on('did-fail-load', (e, errorCode, errorDesc, validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return;
+    loadFailed = true;
+    sendStatus('Could not load: ' + (errorDesc || 'error ' + errorCode) +
+      (validatedURL ? ' (' + validatedURL + ')' : ''), { error: true });
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.close();
+    }
+  });
+
   loadFn(targetWindow);
 
-  targetWindow.on('closed', () => { targetWindow = null; });
+  targetWindow.on('closed', () => {
+    targetWindow = null;
+    // If the window closed before a click was captured, let the app UI
+    // recover (re-enable inputs, hide the close button) instead of staying
+    // stuck on "Ready…". Skip if a load error was already reported, so we
+    // don't overwrite the useful error message.
+    if (!captured && !loadFailed) {
+      resetSessionState();
+      sendStatus('Prototype window closed.', { closed: true });
+    }
+  });
 }
 
 /* ---- Load a prototype's index.html (or image) via file path ---- */
