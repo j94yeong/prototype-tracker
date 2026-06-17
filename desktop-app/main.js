@@ -219,6 +219,16 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
       sessionStart = { wallMs: wallMs, perfMs: perfMs };
       pageName = targetWindow.webContents.getTitle() || '';
 
+      // Make the loading overlay invisible (but still click-blocking) BEFORE
+      // screenshotting, so the capture shows the real prototype rather than
+      // the "Preparing test…" cover. Using opacity:0 keeps it absorbing
+      // clicks, so the tester still can't interact until session-armed below
+      // removes it and installs the click listener — no clickable gap.
+      await targetWindow.webContents.executeJavaScript(
+        '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
+        'if(o)o.style.opacity="0";return true;})();'
+      );
+
       const image = await targetWindow.webContents.capturePage();
       const size = image.getSize();
       const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
