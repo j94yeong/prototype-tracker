@@ -155,7 +155,6 @@ ipcMain.handle('load-prototype', async (event, payload) => {
   openTargetWindow(function (win) {
     if (imageExts.indexOf(ext) !== -1) {
       // Wrap a bare image in a minimal full-screen HTML page
-      const escaped = filePath.replace(/\\/g, '/');
       const imgUrl = url.format({ pathname: filePath, protocol: 'file:', slashes: true });
       const html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
         '<style>*{margin:0;padding:0;box-sizing:border-box}' +
