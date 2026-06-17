@@ -67,10 +67,50 @@ function installClickListener() {
   document.addEventListener('click', onFirstClick, true);
 }
 
+/* ---- Loading overlay ----
+ * Shown immediately (before the prototype is interactive) so the tester
+ * can't click anything until the session is armed — the screenshot is
+ * taken and the click listener is ready. Appended to <html> so it survives
+ * the page replacing <body>, and covers the whole viewport. */
+const LOADING_ID = '__fct_loading_overlay__';
+
+function showLoadingOverlay() {
+  if (document.getElementById(LOADING_ID)) return;
+  const root = document.documentElement || document.body;
+  if (!root) return;
+  const ov = document.createElement('div');
+  ov.id = LOADING_ID;
+  ov.setAttribute('style', [
+    'position:fixed', 'top:0', 'left:0', 'right:0', 'bottom:0',
+    'z-index:2147483647', 'background:#0e1116', 'color:#cdd6e3',
+    'display:flex', 'flex-direction:column', 'align-items:center',
+    'justify-content:center',
+    'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif'
+  ].join(';'));
+  ov.innerHTML =
+    '<div style="width:34px;height:34px;border:3px solid #2a3340;' +
+    'border-top-color:#4f8ef7;border-radius:50%;' +
+    'animation:__fctspin 0.7s linear infinite"></div>' +
+    '<div style="margin-top:16px;font-size:14px">Preparing test… please wait</div>' +
+    '<style>@keyframes __fctspin{to{transform:rotate(360deg)}}</style>';
+  root.appendChild(ov);
+}
+
+function removeLoadingOverlay() {
+  const ov = document.getElementById(LOADING_ID);
+  if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+}
+
+// Show the overlay as early as possible, and again once the DOM is ready
+// (in case the page rebuilt the document after preload ran).
+showLoadingOverlay();
+document.addEventListener('DOMContentLoaded', showLoadingOverlay);
+
 // Main process tells us once the screenshot + sessionStart have been
 // captured, so we don't start listening for clicks before that's ready.
 ipcRenderer.on('session-armed', () => {
   armed = true;
+  removeLoadingOverlay();
   installClickListener();
 });
 

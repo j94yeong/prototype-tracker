@@ -230,10 +230,13 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
         dpr: dpr
       };
 
+      // Always notify the in-page preload so it removes its loading overlay.
+      // For file/url that same signal installs the DOM click listener; for
+      // figma the cross-origin click is captured by the injected overlay
+      // instead (the preload's document listener can't see iframe clicks).
+      targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
       if (mode === 'figma') {
         installFigmaCapture(targetWindow.webContents);
-      } else {
-        targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
       }
       sendStatus('Ready — make your first click in the prototype window.', { armed: true });
     } catch (err) {
