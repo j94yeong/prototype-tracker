@@ -1,111 +1,136 @@
 # First-Click Tracker
 
-A local-only, no-server first-click test harness for exported HTML prototypes. Testers double-click an HTML file, click once, and a results file is saved. You load those files into the viewer to see where everyone clicked.
+A local-only, no-server first-click test harness for prototypes. The owner opens a native desktop app, loads a prototype, and testers click once — a `.fct` results file is saved automatically. The owner drags all returned files into the viewer to see where everyone clicked.
 
 ---
 
-## How It Works
+## What's Included
 
-1. You **inject** the tracker into your prototype HTML.
-2. Testers **open** the HTML file by double-clicking it — no server needed.
-3. They enter their name (optional) and click **Start Test**, then click once on the prototype.
-4. A `.fct` file downloads automatically. They send it back to you.
-5. You open **viewer.html**, drag in all the `.fct` files, and see every click plotted on a screenshot.
-
----
-
-## File Layout
-
-```
-your-prototype/
-├── index.html              ← your prototype (edit to add the snippet)
-├── tracker.js              ← copy from this repo
-├── lib/
-│   ├── sha256.js           ← copy from this repo
-│   ├── canonical.js        ← copy from this repo
-│   └── html2canvas.min.js  ← copy from this repo
-└── ...
-
-viewer.html                 ← keep this separately; open to review results
-```
+| File / Folder | What it is |
+|---|---|
+| `desktop-app/` | Native desktop app (macOS + Windows) — the main way to run tests |
+| `viewer.html` | Standalone results viewer — drag in `.fct` files to review clicks |
+| `tracker.js` + `lib/` | Legacy script-injection method (plain HTML only, no app needed) |
 
 ---
 
-## Setup (Owner)
+## Desktop App (Recommended)
 
-### Step 1 — Copy the tracker files
+The desktop app loads any prototype in an embedded real browser window and captures the first click from the outside — **no changes to your prototype files needed**.
 
-Copy these files from this repo **into the same folder as your prototype**:
+### Supported prototype types
 
-```
-tracker.js
-lib/sha256.js
-lib/canonical.js
-lib/html2canvas.min.js
-```
+| Type | How to load |
+|---|---|
+| Built HTML (`dist/index.html`) | File / Image tab → browse or drag |
+| Image (PNG, JPG, GIF, SVG) | File / Image tab → browse or drag |
+| Vite / dev server | URL tab → paste `http://localhost:5173/` |
+| Figma shared link | URL tab → paste the Figma prototype URL |
 
-### Step 2 — Add the snippet to your prototype HTML
+> For Figma: set the prototype share to **"Anyone with the link can view"** before sending.
 
-Open your prototype's `.html` file and paste the following **just before `</body>`**:
+### Owner — setting up a test
 
-```html
-<script src="lib/sha256.js"></script>
-<script src="lib/canonical.js"></script>
-<script src="lib/html2canvas.min.js"></script>
-<script src="tracker.js"></script>
-```
+1. Open the **First Click Tracker** app
+2. Choose a tab:
+   - **File / Image** — drag or browse for an `index.html` or image file
+   - **URL / Localhost** — paste a localhost URL or Figma shared link
+3. Enter a tester name (optional)
+4. Click **Load Prototype**
+5. The prototype opens in a separate window
 
-Save the file. That's it — the tracker is injected.
+### Tester — taking the test
 
-### Step 3 — Send the folder to testers
+1. The prototype opens — it looks and behaves exactly like a normal browser window
+2. Click once on whatever you would click first
+3. A save dialog appears → save the `session_XXXXXXXX.fct` file
+4. Send that file back to the owner
 
-Zip the entire prototype folder (including the `lib/` subfolder and `tracker.js`) and send it to testers. They only need to unzip and double-click the HTML file.
+> One click only. Subsequent clicks are ignored.
 
-> **Do not send `viewer.html`** to testers — they don't need it.
+### Owner — reviewing results
 
----
-
-## Running a Test (Tester)
-
-1. Unzip the folder you received.
-2. Double-click the `.html` file to open it in a browser.
-3. A small overlay will appear — enter your name (optional) and click **Start Test**.
-4. The prototype loads normally. Click on whatever you would click first.
-5. A file named `session_XXXXXXXX.fct` downloads automatically.
-6. A "Done" screen appears. Send the `.fct` file back to the study owner.
-
-> The test captures **one click only**. Subsequent clicks are ignored.
+1. Open `viewer.html` by double-clicking it
+2. Drag in one or many `.fct` files (or click **Load .fct files**)
+3. Each session appears in the sidebar with tester name, time-to-click, and a validity badge
+4. The screenshot shows a **ring+dot hotspot** for each click
+5. Hover a hotspot for details — tester name, clicked element, element text, time
+6. Click a session in the sidebar to highlight its hotspot
 
 ---
 
-## Reviewing Results (Owner)
+## Building the Desktop App
 
-1. Open `viewer.html` by double-clicking it (no server needed).
-2. Drag one or more `.fct` files onto the drop zone, or click **Load .fct files**.
-3. Each session appears in the left sidebar with:
-   - Tester name
-   - Time-to-click (ms)
-   - Validity badge (✓ Valid or ⚠ Signature mismatch)
-4. The screenshot shows a **ring+dot hotspot** for each click, positioned accurately.
-5. Hover a hotspot to see the tester name, clicked element, element text, and time.
-6. Click a session in the sidebar to highlight its hotspot.
+You need Node.js installed. Run once to install dependencies:
 
-### Deduplication
+```bash
+cd desktop-app
+npm install
+```
 
-If the same tester submits multiple `.fct` files, the viewer keeps only the **earliest session** (by start time) and discards the rest.
+**Run in development:**
+```bash
+npm run dev
+```
 
-### Validity flags
+**Build installer:**
+```bash
+npm run build:mac    # → dist/First Click Tracker-x.x.x-arm64.dmg  (run on Mac)
+npm run build:win    # → dist/First Click Tracker Setup x.x.x.exe   (run on Windows)
+```
 
-The ⚠ flag means the file's signature doesn't match — the data may have been edited. This is **advisory only**; you decide whether to include or ignore that session.
+> **Unsigned builds:** macOS shows a Gatekeeper warning on first launch. Testers right-click the app → **Open** → **Open** to bypass it (once only). Windows shows a SmartScreen prompt — click **Run anyway**.
+
+---
+
+## Legacy: Script-Injection Method
+
+For plain HTML prototypes when you don't want to use the desktop app.
+
+### Setup
+
+1. Copy these files into the same folder as your prototype:
+   ```
+   tracker.js
+   lib/sha256.js
+   lib/canonical.js
+   lib/html2canvas.min.js
+   ```
+
+2. Paste this snippet just before `</body>` in your prototype HTML:
+   ```html
+   <script src="lib/sha256.js"></script>
+   <script src="lib/canonical.js"></script>
+   <script src="lib/html2canvas.min.js"></script>
+   <script src="tracker.js"></script>
+   ```
+
+3. Zip the folder (including `lib/` and `tracker.js`) and send to testers.
+
+### Tester flow
+
+1. Unzip and double-click the `.html` file
+2. Enter name (optional) and click **Start Test**
+3. Click once — a `.fct` file downloads automatically
+4. Send the `.fct` file back
+
+> Screenshot quality may be limited on complex pages (SVG foreignObject browser restriction).
+
+---
+
+## Viewer Details
+
+- Works under `file://` — no server needed, just double-click
+- **Deduplication:** if the same tester submits multiple files, only the earliest session is kept
+- **Validity badge:** ⚠ means the file's signature doesn't match — advisory only, never auto-rejected. You decide whether to include the session.
 
 ---
 
 ## Notes
 
-- Works entirely under `file://` — no Node.js, no server, no internet connection required.
-- Session data stays local. Nothing is sent anywhere.
-- The `.fct` file is a base64-encoded JSON envelope containing the click data and a screenshot of the prototype at test start.
-- Integrity checking is friction, not cryptographic security. The secret ships in `tracker.js`, so a determined tester could forge a valid signature. Use it to flag accidental corruption or obvious tampering.
+- `.fct` files are base64-encoded JSON containing click coordinates, timing, element info, and a start-state screenshot
+- Nothing is sent anywhere — all data stays local
+- Integrity signing is friction, not cryptographic security. The secret ships in the code, so a motivated tester could forge a valid signature. Use it to flag accidental corruption or obvious tampering.
 
 ---
 
@@ -113,8 +138,10 @@ The ⚠ flag means the file's signature doesn't match — the data may have been
 
 | Problem | Fix |
 |---|---|
-| Tracker overlay doesn't appear | Make sure `lib/` folder and `tracker.js` are in the same folder as the HTML file and the paths in the snippet match. |
-| Screenshot is blank | Some browsers restrict `SVG foreignObject` capture for complex pages. The click data is still recorded correctly. |
-| `.fct` file doesn't download | Check that the browser isn't blocking downloads from local files. In Chrome, allow downloads from the address bar prompt. |
-| Viewer shows no hotspot | The session may have no screenshot. Click data is still shown in the sidebar. |
-| ⚠ on every session | The `tracker.js` and `viewer.html` may be from different versions. Re-copy from the same repo checkout. |
+| App won't open on Mac | Right-click the app → **Open** → **Open** (Gatekeeper bypass for unsigned builds) |
+| Prototype window is blank | Check the URL is correct and the dev server is running |
+| Figma link shows login wall | Set the Figma prototype share to "Anyone with the link can view" |
+| `.fct` file not saving | Don't cancel the save dialog — click anywhere to close if it appeared behind another window |
+| Viewer shows no hotspot | Session may have no screenshot. Click data is still shown in the sidebar. |
+| ⚠ on every session | `tracker.js` and `viewer.html` may be from different repo versions — re-copy from the same checkout |
+| Legacy: screenshot is blank | Some browsers restrict SVG foreignObject capture. Click data is still recorded correctly. |
