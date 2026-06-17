@@ -87,17 +87,10 @@ function sendStatus(message, extra) {
   }
 }
 
-/* ---- Load a prototype's index.html into a fresh target BrowserWindow ---- */
-ipcMain.handle('load-prototype', async (event, payload) => {
-  const filePath = payload && payload.filePath;
-  testerName = (payload && payload.testerName) || '';
-
-  if (!filePath || !fs.existsSync(filePath)) {
-    return { ok: false, error: 'File not found: ' + filePath };
-  }
-
+/* ---- Shared: open a fresh target BrowserWindow and arm it ---- */
+function openTargetWindow(loadFn, testerNameValue) {
   resetSessionState();
-  testerName = (payload && payload.testerName) || '';
+  testerName = testerNameValue || '';
 
   if (targetWindow && !targetWindow.isDestroyed()) {
     targetWindow.close();
@@ -111,7 +104,8 @@ ipcMain.handle('load-prototype', async (event, payload) => {
     webPreferences: {
       preload: path.join(__dirname, 'preload-target.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webSecurity: false   // needed so file:// resources load inside URL-loaded pages
     }
   });
 
@@ -119,21 +113,13 @@ ipcMain.handle('load-prototype', async (event, payload) => {
 
   targetWindow.webContents.once('did-finish-load', async () => {
     try {
-      // sessionStart timing: Date.now() wall clock + the page's own
-      // performance.now() (high-res, monotonic, same clock the
-      // preload's click handler will read from) captured right as the
-      // prototype finishes loading.
       const wallMs = Date.now();
       const perfMs = await targetWindow.webContents.executeJavaScript('performance.now()');
       sessionId = uuidv4();
       sessionStart = { wallMs: wallMs, perfMs: perfMs };
 
-      // Screenshot of the start-state, taken immediately after load.
       const image = await targetWindow.webContents.capturePage();
       const size = image.getSize();
-      // dpr: using the display scale factor (simpler than mixing zoom
-      // factor semantics, and matches what devicePixelRatio reports for
-      // a non-zoomed window on that display).
       const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
 
       screenshotData = {
@@ -143,26 +129,59 @@ ipcMain.handle('load-prototype', async (event, payload) => {
         dpr: dpr
       };
 
-      // Tell the target window's preload the session has started so it
-      // can install its one-time click listener.
       targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
-
       sendStatus('Loaded. Waiting for first click in the prototype window...');
     } catch (err) {
       sendStatus('Error preparing session: ' + err.message);
     }
   });
 
-  const fileUrl = url.format({
-    pathname: filePath,
-    protocol: 'file:',
-    slashes: true
-  });
-  targetWindow.loadURL(fileUrl);
+  loadFn(targetWindow);
 
-  targetWindow.on('closed', () => {
-    targetWindow = null;
-  });
+  targetWindow.on('closed', () => { targetWindow = null; });
+}
+
+/* ---- Load a prototype's index.html (or image) via file path ---- */
+ipcMain.handle('load-prototype', async (event, payload) => {
+  const filePath = payload && payload.filePath;
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    return { ok: false, error: 'File not found: ' + filePath };
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+  openTargetWindow(function (win) {
+    if (imageExts.indexOf(ext) !== -1) {
+      // Wrap a bare image in a minimal full-screen HTML page
+      const escaped = filePath.replace(/\\/g, '/');
+      const imgUrl = url.format({ pathname: filePath, protocol: 'file:', slashes: true });
+      const html = '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<style>*{margin:0;padding:0;box-sizing:border-box}' +
+        'body{background:#1a1a1a;display:flex;align-items:center;justify-content:center;min-height:100vh}' +
+        'img{max-width:100%;max-height:100vh;display:block}</style></head>' +
+        '<body><img src="' + imgUrl + '"></body></html>';
+      win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    } else {
+      win.loadURL(url.format({ pathname: filePath, protocol: 'file:', slashes: true }));
+    }
+  }, (payload && payload.testerName) || '');
+
+  return { ok: true };
+});
+
+/* ---- Load a prototype via URL (localhost, Figma, any live URL) ---- */
+ipcMain.handle('load-prototype-url', async (event, payload) => {
+  const protoUrl = payload && payload.url;
+
+  if (!protoUrl || !/^https?:\/\/.+/.test(protoUrl.trim())) {
+    return { ok: false, error: 'Please enter a valid URL starting with http:// or https://' };
+  }
+
+  openTargetWindow(function (win) {
+    win.loadURL(protoUrl.trim());
+  }, (payload && payload.testerName) || '');
 
   return { ok: true };
 });
@@ -246,9 +265,13 @@ async function saveFctFile(b64Content, defaultFilename) {
 ipcMain.handle('pick-prototype-file', async () => {
   if (!appWindow) return { canceled: true };
   const result = await dialog.showOpenDialog(appWindow, {
-    title: 'Choose prototype index.html',
+    title: 'Choose prototype file',
     properties: ['openFile'],
-    filters: [{ name: 'HTML', extensions: ['html', 'htm'] }]
+    filters: [
+      { name: 'Prototype files', extensions: ['html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] },
+      { name: 'HTML', extensions: ['html', 'htm'] },
+      { name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] }
+    ]
   });
   if (result.canceled || !result.filePaths.length) {
     return { canceled: true };

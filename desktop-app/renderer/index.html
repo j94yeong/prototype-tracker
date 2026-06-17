@@ -15,7 +15,7 @@
     justify-content: center;
   }
   #card {
-    width: 460px;
+    width: 480px;
     background: #fff;
     border-radius: 14px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.12);
@@ -24,10 +24,37 @@
   h1 { font-size: 19px; font-weight: 700; margin-bottom: 6px; }
   .sub { font-size: 13px; color: #888; margin-bottom: 22px; line-height: 1.5; }
 
+  /* Tab switcher */
+  #tabs {
+    display: flex;
+    border: 1.5px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 18px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 9px 0;
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    background: #fff;
+    color: #888;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .tab-btn:not(:last-child) { border-right: 1.5px solid #e0e0e0; }
+  .tab-btn.active { background: #4f8ef7; color: #fff; }
+
+  /* Panels */
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Drop zone */
   #drop-zone {
     border: 2px dashed #ccc;
     border-radius: 12px;
-    padding: 28px 16px;
+    padding: 24px 16px;
     text-align: center;
     color: #999;
     cursor: pointer;
@@ -35,14 +62,17 @@
     margin-bottom: 18px;
   }
   #drop-zone.drag-over { border-color: #4f8ef7; background: #eef3ff; color: #4f8ef7; }
-  #drop-zone-icon { font-size: 32px; margin-bottom: 8px; }
+  #drop-zone-icon { font-size: 30px; margin-bottom: 8px; }
   #drop-zone p { font-size: 13px; }
-  #drop-zone .file-name { font-weight: 600; color: #4f8ef7; margin-top: 6px; word-break: break-all; }
+  #drop-zone .hint { font-size: 12px; color: #bbb; margin-top: 4px; }
+  #drop-zone .file-name { font-weight: 600; color: #4f8ef7; margin-top: 6px; word-break: break-all; font-size: 13px; }
+
+  /* URL panel */
+  #url-hint { font-size: 12px; color: #aaa; margin-bottom: 10px; line-height: 1.6; }
 
   label { display: block; font-size: 13px; color: #444; margin-bottom: 6px; font-weight: 500; }
   input[type="text"] {
     width: 100%;
-    box-sizing: border-box;
     padding: 10px 14px;
     font-size: 14px;
     border: 1.5px solid #ddd;
@@ -63,9 +93,14 @@
     cursor: pointer;
     margin-bottom: 10px;
   }
-  #load-prototype-btn { background: #4f8ef7; color: #fff; }
-  #load-prototype-btn:hover { background: #3a7ae0; }
-  #load-prototype-btn:disabled { background: #bcd2f5; cursor: not-allowed; }
+  #load-file-btn { background: #4f8ef7; color: #fff; }
+  #load-file-btn:hover { background: #3a7ae0; }
+  #load-file-btn:disabled { background: #bcd2f5; cursor: not-allowed; }
+
+  #load-url-btn { background: #4f8ef7; color: #fff; }
+  #load-url-btn:hover { background: #3a7ae0; }
+  #load-url-btn:disabled { background: #bcd2f5; cursor: not-allowed; }
+
   #reset-btn { background: #eee; color: #333; display: none; }
   #reset-btn:hover { background: #ddd; }
 
@@ -77,25 +112,46 @@
     min-height: 18px;
   }
   #status.success { color: #1a8040; font-weight: 600; }
+  #status.error { color: #c0392b; }
 </style>
 </head>
 <body>
   <div id="card">
     <h1>First Click Tracker</h1>
-    <div class="sub">Load a prototype's index.html, optionally name the tester, then watch for their first click. A signed .fct file is saved automatically.</div>
+    <div class="sub">Load a prototype, name the tester (optional), then watch for their first click.</div>
 
-    <div id="drop-zone">
-      <div id="drop-zone-icon">&#128193;</div>
-      <p>Drag an index.html here, or click to browse</p>
-      <div class="file-name" id="file-name"></div>
+    <div id="tabs">
+      <button class="tab-btn active" data-tab="file">File / Image</button>
+      <button class="tab-btn" data-tab="url">URL / Localhost</button>
     </div>
 
-    <label for="tester-name">Tester name (optional)</label>
-    <input type="text" id="tester-name" placeholder="e.g. Jane Smith">
+    <!-- File panel -->
+    <div id="panel-file" class="panel active">
+      <div id="drop-zone">
+        <div id="drop-zone-icon">&#128193;</div>
+        <p>Drag a file here, or click to browse</p>
+        <div class="hint">HTML prototype or PNG/JPG/GIF image</div>
+        <div class="file-name" id="file-name"></div>
+      </div>
+      <label for="tester-name-file">Tester name (optional)</label>
+      <input type="text" id="tester-name-file" placeholder="e.g. Jane Smith">
+      <button id="load-file-btn" disabled>Load Prototype</button>
+    </div>
 
-    <button id="load-prototype-btn" disabled>Load Prototype</button>
+    <!-- URL panel -->
+    <div id="panel-url" class="panel">
+      <div id="url-hint">
+        Paste a URL to load in the embedded browser.<br>
+        Works with <strong>localhost</strong> (Vite, any dev server) and <strong>Figma shared links</strong> (set share to "Anyone with the link").
+      </div>
+      <label for="proto-url">URL</label>
+      <input type="text" id="proto-url" placeholder="http://localhost:5173/">
+      <label for="tester-name-url">Tester name (optional)</label>
+      <input type="text" id="tester-name-url" placeholder="e.g. Jane Smith">
+      <button id="load-url-btn" disabled>Load Prototype</button>
+    </div>
+
     <button id="reset-btn">Load another prototype</button>
-
     <div id="status"></div>
   </div>
 

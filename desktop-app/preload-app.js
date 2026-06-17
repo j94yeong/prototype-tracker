@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('fctApi', {
   pickPrototypeFile: () => ipcRenderer.invoke('pick-prototype-file'),
   loadPrototype: (filePath, testerName) =>
     ipcRenderer.invoke('load-prototype', { filePath: filePath, testerName: testerName }),
+  loadPrototypeUrl: (url, testerName) =>
+    ipcRenderer.invoke('load-prototype-url', { url: url, testerName: testerName }),
   resetSession: () => ipcRenderer.send('reset-session'),
   onStatusUpdate: (callback) => {
     const listener = (event, payload) => callback(payload);

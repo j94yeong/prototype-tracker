@@ -1,95 +1,147 @@
-/*
- * App UI logic (runs in the app window's renderer). Talks to main only via
- * the `fctApi` bridge exposed by preload-app.js - no direct Node/IPC access.
- */
-
 'use strict';
 
 (function () {
-  const dropZone = document.getElementById('drop-zone');
-  const fileNameEl = document.getElementById('file-name');
-  const testerNameInput = document.getElementById('tester-name');
-  const loadBtn = document.getElementById('load-prototype-btn');
-  const resetBtn = document.getElementById('reset-btn');
-  const statusEl = document.getElementById('status');
+  /* ---- Elements ---- */
+  var dropZone       = document.getElementById('drop-zone');
+  var fileNameEl     = document.getElementById('file-name');
+  var testerNameFile = document.getElementById('tester-name-file');
+  var loadFileBtn    = document.getElementById('load-file-btn');
 
-  let selectedFilePath = null;
+  var protoUrlInput  = document.getElementById('proto-url');
+  var testerNameUrl  = document.getElementById('tester-name-url');
+  var loadUrlBtn     = document.getElementById('load-url-btn');
 
+  var resetBtn       = document.getElementById('reset-btn');
+  var statusEl       = document.getElementById('status');
+
+  var tabBtns        = document.querySelectorAll('.tab-btn');
+  var panelFile      = document.getElementById('panel-file');
+  var panelUrl       = document.getElementById('panel-url');
+
+  var selectedFilePath = null;
+
+  /* ---- Tab switching ---- */
+  tabBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tabBtns.forEach(function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      var tab = btn.getAttribute('data-tab');
+      panelFile.classList.toggle('active', tab === 'file');
+      panelUrl.classList.toggle('active', tab === 'url');
+      setStatus('');
+    });
+  });
+
+  /* ---- Helpers ---- */
   function setSelectedFile(filePath) {
     selectedFilePath = filePath;
-    fileNameEl.textContent = filePath || '';
-    loadBtn.disabled = !filePath;
+    fileNameEl.textContent = filePath ? filePath.split(/[\\/]/).pop() : '';
+    loadFileBtn.disabled = !filePath;
   }
 
-  function setStatus(message, success) {
+  function setStatus(message, type) {
     statusEl.textContent = message || '';
-    statusEl.classList.toggle('success', !!success);
+    statusEl.className = type || '';
   }
 
-  /* ---- Drag and drop ---- */
-  dropZone.addEventListener('click', async () => {
-    const result = await window.fctApi.pickPrototypeFile();
+  function lockUI() {
+    loadFileBtn.disabled = true;
+    loadUrlBtn.disabled = true;
+    resetBtn.style.display = 'block';
+  }
+
+  function unlockUI() {
+    loadFileBtn.disabled = !selectedFilePath;
+    loadUrlBtn.disabled = !protoUrlInput.value.trim();
+  }
+
+  /* ---- URL input enables/disables load button ---- */
+  protoUrlInput.addEventListener('input', function () {
+    loadUrlBtn.disabled = !protoUrlInput.value.trim();
+  });
+
+  /* ---- Drop zone: click to browse ---- */
+  dropZone.addEventListener('click', async function () {
+    var result = await window.fctApi.pickPrototypeFile();
     if (!result.canceled && result.filePath) {
       setSelectedFile(result.filePath);
     }
   });
 
-  dropZone.addEventListener('dragover', (e) => {
+  dropZone.addEventListener('dragover', function (e) {
     e.preventDefault();
     dropZone.classList.add('drag-over');
   });
 
-  dropZone.addEventListener('dragleave', () => {
+  dropZone.addEventListener('dragleave', function () {
     dropZone.classList.remove('drag-over');
   });
 
-  dropZone.addEventListener('drop', (e) => {
+  dropZone.addEventListener('drop', function (e) {
     e.preventDefault();
     dropZone.classList.remove('drag-over');
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      // Electron exposes the real filesystem path on dropped File objects.
-      const filePath = files[0].path;
-      if (filePath) {
-        setSelectedFile(filePath);
-      }
+    var files = e.dataTransfer.files;
+    if (files && files.length > 0 && files[0].path) {
+      setSelectedFile(files[0].path);
     }
   });
 
-  /* ---- Load prototype ---- */
-  loadBtn.addEventListener('click', async () => {
+  /* ---- Load via file ---- */
+  loadFileBtn.addEventListener('click', async function () {
     if (!selectedFilePath) return;
-    loadBtn.disabled = true;
+    lockUI();
     setStatus('Loading prototype...');
 
-    const testerName = testerNameInput.value.trim();
-    const result = await window.fctApi.loadPrototype(selectedFilePath, testerName);
+    var testerName = testerNameFile.value.trim();
+    var result = await window.fctApi.loadPrototype(selectedFilePath, testerName);
 
     if (!result.ok) {
-      setStatus('Error: ' + result.error);
-      loadBtn.disabled = false;
+      setStatus('Error: ' + result.error, 'error');
+      unlockUI();
+      resetBtn.style.display = 'none';
       return;
     }
 
-    resetBtn.style.display = 'block';
     setStatus('Prototype window opened. Waiting for the first click...');
   });
 
-  /* ---- Reset / load another prototype ---- */
-  resetBtn.addEventListener('click', () => {
-    window.fctApi.resetSession();
-    setSelectedFile(null);
-    testerNameInput.value = '';
-    setStatus('');
-    resetBtn.style.display = 'none';
-    loadBtn.disabled = true;
+  /* ---- Load via URL ---- */
+  loadUrlBtn.addEventListener('click', async function () {
+    var rawUrl = protoUrlInput.value.trim();
+    if (!rawUrl) return;
+    lockUI();
+    setStatus('Loading prototype...');
+
+    var testerName = testerNameUrl.value.trim();
+    var result = await window.fctApi.loadPrototypeUrl(rawUrl, testerName);
+
+    if (!result.ok) {
+      setStatus('Error: ' + result.error, 'error');
+      unlockUI();
+      resetBtn.style.display = 'none';
+      return;
+    }
+
+    setStatus('Prototype window opened. Waiting for the first click...');
   });
 
-  /* ---- Status updates pushed from main ---- */
-  window.fctApi.onStatusUpdate((payload) => {
-    setStatus(payload.message, !!payload.done);
+  /* ---- Reset ---- */
+  resetBtn.addEventListener('click', function () {
+    window.fctApi.resetSession();
+    setSelectedFile(null);
+    testerNameFile.value = '';
+    protoUrlInput.value = '';
+    testerNameUrl.value = '';
+    setStatus('');
+    resetBtn.style.display = 'none';
+    loadUrlBtn.disabled = true;
+  });
+
+  /* ---- Status updates from main process ---- */
+  window.fctApi.onStatusUpdate(function (payload) {
+    setStatus(payload.message, payload.done ? 'success' : (payload.error ? 'error' : ''));
     if (payload.done) {
-      loadBtn.disabled = false;
+      unlockUI();
     }
   });
 })();
