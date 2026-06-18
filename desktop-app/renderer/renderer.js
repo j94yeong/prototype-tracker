@@ -164,7 +164,7 @@
   window.fctApi.onStatusUpdate(function (payload) {
     showSpinner(!!payload.loading);
     setStatus(payload.message, payload.done ? 'success' : (payload.error ? 'error' : ''));
-    if (payload.done || payload.error || payload.closed) {
+    if (payload.done || payload.error || payload.closed || payload.canceled) {
       unlockUI();
     }
     if (payload.closed || payload.error) {
