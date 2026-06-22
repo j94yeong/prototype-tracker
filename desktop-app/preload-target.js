@@ -179,6 +179,21 @@ ipcRenderer.on('session-armed', (event, payload) => {
   }
 });
 
+// Save dialog was cancelled in exploratory mode — re-enable the End button
+// and resume capturing clicks so the session can be saved again without
+// having to redo the whole exploration.
+ipcRenderer.on('enable-end-button', () => {
+  const btn = document.getElementById(END_BTN_ID);
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'I think I completed the task ✓';
+    btn.style.background = '#1a8040';
+    btn.style.cursor = 'pointer';
+  }
+  exploratoryBound = false;
+  installExploratoryClickListener();
+});
+
 // Expose a tiny, harmless bridge in case the renderer wants to check
 // armed-state (not required by the prototype, kept minimal/optional).
 contextBridge.exposeInMainWorld('__fctBridge', {

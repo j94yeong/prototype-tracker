@@ -206,7 +206,19 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
 
   let armed = false;
   async function arm() {
-    if (armed) return;
+    if (armed) {
+      // Re-arm after an in-prototype navigation. Only exploratory needs this:
+      // the fresh page re-shows its loading overlay, so we must resend
+      // session-armed to clear it, reinstall the click listener and re-show
+      // the End button. We keep the original screenshot + sessionStart so the
+      // timing spans the whole session. First-click ends on one click, and
+      // figma exploratory isn't offered, so neither re-arms.
+      if (testType === 'exploratory' && !captured &&
+          targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+      }
+      return;
+    }
     armed = true;
     try {
       // Settle delay: Figma renders its prototype asynchronously well after
@@ -269,8 +281,9 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
 
   // dom-ready fires as soon as the document is interactive — sooner than
   // did-finish-load (which waits for every sub-resource), so the window arms
-  // promptly instead of feeling laggy on heavier pages.
-  targetWindow.webContents.once('dom-ready', arm);
+  // promptly instead of feeling laggy on heavier pages. Using .on (not .once)
+  // so exploratory sessions re-arm after each in-prototype navigation.
+  targetWindow.webContents.on('dom-ready', arm);
 
   // If the page can't load (offline, wrong port, bad/dead link), report it
   // instead of leaving the spinner running forever. Main-frame errors only;
@@ -442,7 +455,11 @@ function finalizeCapture(clickInfo) {
     const b64 = btoa64(jsonStr);
     const defaultFilename = buildFilename(testerName, pageName, clickInfo.wallMs);
 
-    saveFctFile(b64, defaultFilename);
+    saveFctFile(b64, defaultFilename).then(function (saved) {
+      if (!saved) {
+        sendStatus('Click captured, but save was cancelled. Load the prototype again to retry.', { canceled: true });
+      }
+    });
   } catch (err) {
     sendStatus('Error capturing click: ' + err.message, { error: true });
   }
@@ -489,21 +506,34 @@ async function finalizeExploratory(endInfo) {
     const b64 = btoa64(JSON.stringify(data));
     const defaultFilename = buildFilename(testerName, pageName, endWall);
 
-    await saveFctFile(b64, defaultFilename);
+    const saved = await saveFctFile(b64, defaultFilename);
 
-    // The session is done — close the prototype window so the tester gets a
-    // clear "finished" signal instead of a still-live page.
-    if (targetWindow && !targetWindow.isDestroyed()) {
-      targetWindow.close();
-      targetWindow = null;
+    if (saved) {
+      // Session done — close the prototype window so the tester gets a clear
+      // "finished" signal instead of a still-live page.
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.close();
+        targetWindow = null;
+      }
+    } else {
+      // Save cancelled: keep the whole session alive (clicks are still in
+      // memory) and re-enable the End button so it can be saved again without
+      // redoing the exploration.
+      captured = false;
+      sendStatus('Save cancelled — your session is still active. Press the button again to save.', { canceled: true });
+      if (targetWindow && !targetWindow.isDestroyed()) {
+        targetWindow.webContents.send('enable-end-button');
+      }
     }
   } catch (err) {
     sendStatus('Error saving session: ' + err.message, { error: true });
   }
 }
 
+// Returns true if the file was written, false if the user cancelled. Callers
+// decide what to do on cancel (first-click vs exploratory differ).
 async function saveFctFile(b64Content, defaultFilename) {
-  if (!appWindow || appWindow.isDestroyed()) return;
+  if (!appWindow || appWindow.isDestroyed()) return false;
 
   const result = await dialog.showSaveDialog(appWindow, {
     title: 'Save session',
@@ -512,14 +542,14 @@ async function saveFctFile(b64Content, defaultFilename) {
   });
 
   if (result.canceled || !result.filePath) {
-    sendStatus('Session captured, but save was cancelled. Load the prototype again to retry.', { canceled: true });
-    return;
+    return false;
   }
 
   fs.writeFileSync(result.filePath, b64Content, 'utf8');
 
   const savedName = path.basename(result.filePath);
   sendStatus('Session saved as ' + savedName, { done: true, filename: savedName });
+  return true;
 }
 
 /* ---- IPC: app version (read from package.json by main, not sandboxed) ---- */
