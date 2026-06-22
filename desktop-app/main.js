@@ -205,17 +205,49 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
   sendStatus('Loading prototype…', { loading: true });
 
   let armed = false;
+  let rearmInProgress = false;
   async function arm() {
     if (armed) {
-      // Re-arm after an in-prototype navigation. Only exploratory needs this:
-      // the fresh page re-shows its loading overlay, so we must resend
-      // session-armed to clear it, reinstall the click listener and re-show
-      // the End button. We keep the original screenshot + sessionStart so the
-      // timing spans the whole session. First-click ends on one click, and
-      // figma exploratory isn't offered, so neither re-arms.
-      if (testType === 'exploratory' && !captured &&
-          targetWindow && !targetWindow.isDestroyed()) {
-        targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+      // A navigation happened inside the prototype window. If a click hasn't
+      // been captured yet, the new page gets a fresh preload that re-shows the
+      // loading overlay — so we must re-arm regardless of test type. We take a
+      // fresh screenshot of the destination page (much better than a splash/
+      // loader screenshot) and keep the original sessionStart so timing is
+      // measured from the very first load. Guard against concurrent arm calls
+      // from rapid navigations with rearmInProgress.
+      if (captured || rearmInProgress) return;
+      if (!targetWindow || targetWindow.isDestroyed()) return;
+      rearmInProgress = true;
+      try {
+        await delay(400); // settle paint on the new page
+        if (captured || !targetWindow || targetWindow.isDestroyed()) return;
+
+        pageName = targetWindow.webContents.getTitle() || pageName;
+
+        await targetWindow.webContents.executeJavaScript(
+          '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
+          'if(o)o.style.opacity="0";return true;})();'
+        );
+        await new Promise(r => setTimeout(r, 80));
+
+        const image = await targetWindow.webContents.capturePage();
+        const size = image.getSize();
+        const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
+        screenshotData = {
+          dataURI: 'data:image/png;base64,' + image.toPNG().toString('base64'),
+          width: size.width,
+          height: size.height,
+          dpr: dpr
+        };
+
+        if (!captured && targetWindow && !targetWindow.isDestroyed()) {
+          targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+        }
+      } catch (err) {
+        // Non-fatal: if the re-arm fails the tester can still try to interact;
+        // worst case the overlay stays up and we fall back to loading again.
+      } finally {
+        rearmInProgress = false;
       }
       return;
     }
