@@ -32,6 +32,8 @@ let sessionStart = null; // { wallMs, perfMs }
 let screenshotData = null; // { dataURI, width, height, dpr }
 let pageName = '';
 let captured = false; // ensures exactly one capture per session
+let testType = 'first-click'; // 'first-click' | 'exploratory'
+let exploratoryClicks = []; // all clicks during an exploratory session
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -107,6 +109,8 @@ function resetSessionState() {
   screenshotData = null;
   pageName = '';
   captured = false;
+  testType = 'first-click';
+  exploratoryClicks = [];
 }
 
 function sendStatus(message, extra) {
@@ -173,10 +177,11 @@ function installFigmaCapture(wc) {
 
 /* ---- Shared: open a fresh target BrowserWindow and arm it ----
  * mode: 'file' | 'url' | 'figma' */
-function openTargetWindow(loadFn, testerNameValue, mode) {
+function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
   resetSessionState();
   testerName = testerNameValue || '';
   mode = mode || 'file';
+  testType = testTypeValue || 'first-click';
 
   if (targetWindow && !targetWindow.isDestroyed()) {
     targetWindow.close();
@@ -246,11 +251,17 @@ function openTargetWindow(loadFn, testerNameValue, mode) {
       // For file/url that same signal installs the DOM click listener; for
       // figma the cross-origin click is captured by the injected overlay
       // instead (the preload's document listener can't see iframe clicks).
-      targetWindow.webContents.send('session-armed', { sessionId, sessionStart });
-      if (mode === 'figma') {
+      targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+      // The Figma overlay swallows a single click — only usable for the
+      // first-click test, where the test ends on that click anyway.
+      if (mode === 'figma' && testType === 'first-click') {
         installFigmaCapture(targetWindow.webContents);
       }
-      sendStatus('Ready — make your first click in the prototype window.', { armed: true });
+      if (testType === 'exploratory') {
+        sendStatus('Recording — interact freely, then click “I think I completed the task”.', { armed: true });
+      } else {
+        sendStatus('Ready — make your first click in the prototype window.', { armed: true });
+      }
     } catch (err) {
       sendStatus('Error preparing session: ' + err.message, { error: true });
     }
@@ -314,7 +325,7 @@ ipcMain.handle('load-prototype', async (event, payload) => {
     } else {
       win.loadURL(url.format({ pathname: filePath, protocol: 'file:', slashes: true }));
     }
-  }, (payload && payload.testerName) || '', 'file');
+  }, (payload && payload.testerName) || '', 'file', (payload && payload.testType) || 'first-click');
 
   return { ok: true };
 });
@@ -329,7 +340,7 @@ ipcMain.handle('load-prototype-url', async (event, payload) => {
 
   openTargetWindow(function (win) {
     win.loadURL(protoUrl.trim());
-  }, (payload && payload.testerName) || '', 'url');
+  }, (payload && payload.testerName) || '', 'url', (payload && payload.testType) || 'first-click');
 
   return { ok: true };
 });
@@ -344,7 +355,7 @@ ipcMain.handle('load-prototype-figma', async (event, payload) => {
 
   openTargetWindow(function (win) {
     win.loadURL(protoUrl.trim());
-  }, (payload && payload.testerName) || '', 'figma');
+  }, (payload && payload.testerName) || '', 'figma', (payload && payload.testType) || 'first-click');
 
   return { ok: true };
 });
@@ -354,6 +365,32 @@ ipcMain.on('first-click-captured', (event, clickInfo) => {
   if (captured) return;
   captured = true;
   finalizeCapture(clickInfo);
+});
+
+/* ---- Exploratory: accumulate every click until the session is ended ---- */
+ipcMain.on('exploratory-click', (event, clickInfo) => {
+  if (testType !== 'exploratory' || captured) return;
+  if (!sessionStart || !sessionId) return;
+  exploratoryClicks.push({
+    wallMs: clickInfo.wallMs,
+    perfMs: clickInfo.perfMs,
+    timeSinceStartMs: clickInfo.wallMs - sessionStart.wallMs,
+    x: clickInfo.x,
+    y: clickInfo.y,
+    xPct: clickInfo.xPct,
+    yPct: clickInfo.yPct,
+    viewportW: clickInfo.viewportW,
+    viewportH: clickInfo.viewportH,
+    targetSelector: clickInfo.targetSelector,
+    targetText: clickInfo.targetText
+  });
+});
+
+/* ---- Exploratory: tester pressed "I think I completed the task" ---- */
+ipcMain.on('exploratory-end', (event, endInfo) => {
+  if (testType !== 'exploratory' || captured) return;
+  captured = true;
+  finalizeExploratory(endInfo);
 });
 
 /* ---- Build + sign + save the session from a captured click ---- */
@@ -411,24 +448,78 @@ function finalizeCapture(clickInfo) {
   }
 }
 
+/* ---- Build + sign + save an exploratory session ---- */
+async function finalizeExploratory(endInfo) {
+  if (!sessionStart || !sessionId) {
+    return; // stray event, ignore
+  }
+
+  try {
+    const endWall = (endInfo && endInfo.wallMs) || Date.now();
+    const endPerf = (endInfo && endInfo.perfMs) || 0;
+
+    const data = {
+      schemaVersion: 1,
+      testType: 'exploratory',
+      sessionId: sessionId,
+      testerName: testerName,
+      sessionStart: {
+        wallMs: sessionStart.wallMs,
+        perfMs: sessionStart.perfMs
+      },
+      sessionEnd: {
+        wallMs: endWall,
+        perfMs: endPerf,
+        durationMs: endWall - sessionStart.wallMs
+      },
+      clicks: exploratoryClicks,
+      screenshot: {
+        dataURI: screenshotData ? screenshotData.dataURI : '',
+        width: screenshotData ? screenshotData.width : 0,
+        height: screenshotData ? screenshotData.height : 0,
+        dpr: screenshotData ? screenshotData.dpr : 1
+      }
+    };
+
+    // Same canonicalJSON + sha256hex + secret scheme as first-click, just
+    // over the exploratory field set — viewer.html verifies both shapes.
+    const sig = sha256hex(canonicalJSON(data) + '|' + SECRET);
+    data.integrity = { sig: sig, secret: SECRET };
+
+    const b64 = btoa64(JSON.stringify(data));
+    const defaultFilename = buildFilename(testerName, pageName, endWall);
+
+    await saveFctFile(b64, defaultFilename);
+
+    // The session is done — close the prototype window so the tester gets a
+    // clear "finished" signal instead of a still-live page.
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.close();
+      targetWindow = null;
+    }
+  } catch (err) {
+    sendStatus('Error saving session: ' + err.message, { error: true });
+  }
+}
+
 async function saveFctFile(b64Content, defaultFilename) {
   if (!appWindow || appWindow.isDestroyed()) return;
 
   const result = await dialog.showSaveDialog(appWindow, {
-    title: 'Save First-Click session',
+    title: 'Save session',
     defaultPath: defaultFilename,
     filters: [{ name: 'First Click Tracker session', extensions: ['fct'] }]
   });
 
   if (result.canceled || !result.filePath) {
-    sendStatus('Click captured, but save was cancelled. You can retry by loading the prototype again.');
+    sendStatus('Session captured, but save was cancelled. Load the prototype again to retry.', { canceled: true });
     return;
   }
 
   fs.writeFileSync(result.filePath, b64Content, 'utf8');
 
   const savedName = path.basename(result.filePath);
-  sendStatus('Click captured — saved as ' + savedName, { done: true, filename: savedName });
+  sendStatus('Session saved as ' + savedName, { done: true, filename: savedName });
 }
 
 /* ---- IPC: app version (read from package.json by main, not sandboxed) ---- */

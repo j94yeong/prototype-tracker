@@ -150,6 +150,23 @@
   .hotspot.active .ring { stroke: #1565c0; opacity: 1; }
   .hotspot.active .dot { fill: #1565c0; opacity: 1; }
 
+  /* Exploratory numbered hotspots + connecting path */
+  .order-badge {
+    min-width: 22px; height: 22px; padding: 0 5px;
+    background: #1565c0; color: #fff; border-radius: 100px;
+    font-size: 12px; font-weight: 700; line-height: 22px; text-align: center;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.35); border: 2px solid #fff;
+  }
+  #path-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 5;
+  }
+  #path-overlay .path-line {
+    fill: none; stroke: #1565c0; stroke-width: 2;
+    stroke-dasharray: 4 3; opacity: 0.6;
+    vector-effect: non-scaling-stroke;
+  }
+
   /* Tooltip */
   .tooltip {
     position: absolute;
@@ -392,8 +409,9 @@
     session.__valid = valid;
     session.__id = session.sessionId;
 
-    // Deduplication: keep earliest per testerName
-    var nameKey = session.testerName || '__anonymous__';
+    // Deduplication: keep earliest per testerName (scoped by test type so a
+    // first-click and an exploratory run by the same tester don't collide).
+    var nameKey = (session.testType || 'first-click') + '::' + (session.testerName || '__anonymous__');
     var existing = sessionsByName[nameKey];
     if (existing) {
       if (session.sessionStart.wallMs < existing.sessionStart.wallMs) {
@@ -430,15 +448,30 @@
       var storedSig = session.integrity && session.integrity.sig;
       if (!storedSig) return false;
 
-      // Build data object without integrity field
-      var data = {
-        schemaVersion: session.schemaVersion,
-        sessionId: session.sessionId,
-        testerName: session.testerName,
-        sessionStart: session.sessionStart,
-        click: session.click,
-        screenshot: session.screenshot
-      };
+      // Build data object without integrity field. Exploratory sessions sign
+      // a different field set than first-click ones; match each shape exactly.
+      var data;
+      if (session.testType === 'exploratory' || session.clicks) {
+        data = {
+          schemaVersion: session.schemaVersion,
+          testType: session.testType,
+          sessionId: session.sessionId,
+          testerName: session.testerName,
+          sessionStart: session.sessionStart,
+          sessionEnd: session.sessionEnd,
+          clicks: session.clicks,
+          screenshot: session.screenshot
+        };
+      } else {
+        data = {
+          schemaVersion: session.schemaVersion,
+          sessionId: session.sessionId,
+          testerName: session.testerName,
+          sessionStart: session.sessionStart,
+          click: session.click,
+          screenshot: session.screenshot
+        };
+      }
 
       var expected = sha256hex(canonicalJSON(data) + '|' + SECRET);
       return expected === storedSig;
@@ -462,8 +495,15 @@
 
       var meta = document.createElement('div');
       meta.className = 'session-meta';
-      var ttc = s.click && s.click.timeToClickMs;
-      meta.textContent = ttc != null ? formatMs(ttc) + ' to first click' : 'No click recorded';
+      if (s.testType === 'exploratory' || s.clicks) {
+        var n = (s.clicks || []).length;
+        var dur = s.sessionEnd && s.sessionEnd.durationMs;
+        meta.textContent = '🧭 ' + n + (n === 1 ? ' click' : ' clicks') +
+          (dur != null ? ' · ' + formatMs(dur) : '');
+      } else {
+        var ttc = s.click && s.click.timeToClickMs;
+        meta.textContent = ttc != null ? formatMs(ttc) + ' to first click' : 'No click recorded';
+      }
 
       var badge = document.createElement('div');
       badge.className = 'validity-badge ' + (s.__valid ? 'badge-valid' : 'badge-invalid');
@@ -493,8 +533,8 @@
 
   /* ---- Viewer rendering ---- */
   function renderViewer() {
-    // Clear existing hotspots
-    var existing = screenshotWrap.querySelectorAll('.hotspot');
+    // Clear existing hotspots + any exploratory path overlay
+    var existing = screenshotWrap.querySelectorAll('.hotspot, #path-overlay');
     existing.forEach(function (el) { el.parentNode.removeChild(el); });
 
     var active = allSessions.filter(function (s) { return s.__id === activeSessionId; })[0];
@@ -511,12 +551,74 @@
     screenshotImg.style.display = 'block';
     screenshotImg.src = screenshot.dataURI;
 
-    // Render all sessions' hotspots on this screenshot
-    allSessions.forEach(function (s) {
-      if (!s.click) return;
-      var hotspot = createHotspot(s, s.__id === activeSessionId);
-      screenshotWrap.appendChild(hotspot);
+    if (active.testType === 'exploratory' || active.clicks) {
+      // Exploratory: show only the active session's clicks as a numbered path.
+      var clicks = active.clicks || [];
+      if (clicks.length > 1) {
+        screenshotWrap.appendChild(createPathOverlay(clicks));
+      }
+      clicks.forEach(function (click, i) {
+        screenshotWrap.appendChild(createExploratoryHotspot(active, click, i + 1));
+      });
+    } else {
+      // First-click: overlay every (first-click) session's single click.
+      allSessions.forEach(function (s) {
+        if (s.testType === 'exploratory' || s.clicks) return;
+        if (!s.click) return;
+        var hotspot = createHotspot(s, s.__id === activeSessionId);
+        screenshotWrap.appendChild(hotspot);
+      });
+    }
+  }
+
+  /* ---- Exploratory: connecting path between consecutive clicks ---- */
+  function createPathOverlay(clicks) {
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('id', 'path-overlay');
+    svg.setAttribute('viewBox', '0 0 100 100');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    var poly = document.createElementNS(svgNS, 'polyline');
+    poly.setAttribute('points', clicks.map(function (c) {
+      return c.xPct + ',' + c.yPct;
+    }).join(' '));
+    poly.setAttribute('class', 'path-line');
+    svg.appendChild(poly);
+    return svg;
+  }
+
+  function createExploratoryHotspot(session, click, num) {
+    var el = document.createElement('div');
+    el.className = 'hotspot active';
+    el.style.left = click.xPct + '%';
+    el.style.top = click.yPct + '%';
+
+    var badge = document.createElement('div');
+    badge.className = 'order-badge';
+    badge.textContent = num;
+
+    var tooltip = document.createElement('div');
+    tooltip.className = 'tooltip';
+
+    var nameEl = document.createElement('strong');
+    nameEl.textContent = 'Click #' + num + (session.testerName ? ' · ' + session.testerName : '');
+    tooltip.appendChild(nameEl);
+
+    var lines = [
+      'At ' + formatMs(click.timeSinceStartMs) + ' into session',
+      'Element: ' + (click.targetSelector || 'unknown'),
+      click.targetText ? 'Text: "' + click.targetText.slice(0, 60) + '"' : ''
+    ];
+    lines.forEach(function (line) {
+      if (!line) return;
+      var span = document.createElement('div');
+      span.textContent = line;
+      tooltip.appendChild(span);
     });
+
+    el.appendChild(badge);
+    el.appendChild(tooltip);
+    return el;
   }
 
   function createHotspot(session, isActive) {
