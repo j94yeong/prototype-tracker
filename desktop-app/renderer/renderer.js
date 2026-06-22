@@ -29,7 +29,6 @@
   var backBtn        = document.getElementById('back-btn');
   var typeCards      = document.querySelectorAll('.type-card');
   var subText        = document.getElementById('sub-text');
-  var figmaExploreNote = document.getElementById('figma-explore-note');
 
   var selectedFilePath = null;
   var selectedTestType = null;
@@ -42,7 +41,9 @@
     }).catch(function () { /* ignore */ });
   }
 
-  /* ---- Step 1 → Step 2: pick a test type ---- */
+  /* ---- Step 1: pick a test type, then reveal the channel step ---- */
+  var figmaTabBtn = document.querySelector('.tab-btn[data-tab=figma]');
+
   function applyTestTypeUI() {
     var explore = selectedTestType === 'exploratory';
     var label = explore ? 'Start session' : 'Load Prototype';
@@ -50,9 +51,19 @@
     loadUrlBtn.textContent = label;
     loadFigmaBtn.textContent = label;
     subText.textContent = explore
-      ? 'Exploratory test — records every click until the tester ends the session.'
-      : 'First-click test — captures the tester’s first click.';
-    figmaExploreNote.style.display = explore ? 'block' : 'none';
+      ? 'Exploratory test - records every click until the tester ends the session.'
+      : 'First-click test - captures where the tester clicks first.';
+
+    // Figma is not supported for exploratory: hide its tab entirely.
+    // If the user was already on that tab, fall back to File.
+    figmaTabBtn.style.display = explore ? 'none' : '';
+    if (explore && panelFigma.classList.contains('active')) {
+      tabBtns.forEach(function (b) { b.classList.remove('active'); });
+      document.querySelector('.tab-btn[data-tab=file]').classList.add('active');
+      panelFile.classList.add('active');
+      panelUrl.classList.remove('active');
+      panelFigma.classList.remove('active');
+    }
   }
 
   typeCards.forEach(function (card) {
@@ -148,11 +159,11 @@
     }
   });
 
-  /* ---- Load via file ---- */
+  /* ---- Shared loader ---- */
   async function runLoad(invokePromise) {
     lockUI();
     showSpinner(true);
-    setStatus('Loading prototype…');
+    setStatus('Loading prototype...');
     var result = await invokePromise;
     if (!result.ok) {
       showSpinner(false);
@@ -209,4 +220,4 @@
       resetBtn.style.display = 'none';
     }
   });
-})();
+}());
