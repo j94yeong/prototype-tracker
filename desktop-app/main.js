@@ -202,112 +202,124 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
 
   targetWindow.setMenuBarVisibility(false);
 
+  // Capture this specific window so the async 'closed'/'did-fail-load'
+  // handlers below act only on it. Without this, opening a second test (which
+  // closes the old window then assigns a new one) would let the OLD window's
+  // late 'closed' event null out the module ref to the NEW window.
+  const thisWindow = targetWindow;
+
   sendStatus('Loading prototype…', { loading: true });
 
-  let armed = false;
-  let rearmInProgress = false;
+  let firstArmDone = false;
+  let arming = false; // single lock: never let two arm() runs overlap
+
+  // True only while this is still the active window AND it isn't torn down.
+  // Guards every step after an await so a stale arm() (e.g. user reset and
+  // reloaded during the settle delay) can't write shared session state or
+  // screenshot the wrong window.
+  function stillActive() {
+    return thisWindow === targetWindow && !thisWindow.isDestroyed();
+  }
+
+  async function captureScreenshot() {
+    // Hide the loading overlay (kept click-blocking via opacity:0) so the
+    // capture shows the real prototype, then give one paint cycle before grab.
+    await thisWindow.webContents.executeJavaScript(
+      '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
+      'if(o)o.style.opacity="0";return true;})();'
+    );
+    await new Promise(r => setTimeout(r, 80));
+    const image = await thisWindow.webContents.capturePage();
+    const size = image.getSize();
+    const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
+    screenshotData = {
+      dataURI: 'data:image/png;base64,' + image.toPNG().toString('base64'),
+      width: size.width,
+      height: size.height,
+      dpr: dpr
+    };
+  }
+
   async function arm() {
-    if (armed) {
-      // A navigation happened inside the prototype window. If a click hasn't
-      // been captured yet, the new page gets a fresh preload that re-shows the
-      // loading overlay — so we must re-arm regardless of test type. We take a
-      // fresh screenshot of the destination page (much better than a splash/
-      // loader screenshot) and keep the original sessionStart so timing is
-      // measured from the very first load. Guard against concurrent arm calls
-      // from rapid navigations with rearmInProgress.
-      if (captured || rearmInProgress) return;
-      if (!targetWindow || targetWindow.isDestroyed()) return;
-      rearmInProgress = true;
+    if (arming) return;
+
+    if (!firstArmDone) {
+      arming = true;
       try {
-        await delay(400); // settle paint on the new page
-        if (captured || !targetWindow || targetWindow.isDestroyed()) return;
-
-        pageName = targetWindow.webContents.getTitle() || pageName;
-
-        await targetWindow.webContents.executeJavaScript(
-          '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
-          'if(o)o.style.opacity="0";return true;})();'
-        );
-        await new Promise(r => setTimeout(r, 80));
-
-        const image = await targetWindow.webContents.capturePage();
-        const size = image.getSize();
-        const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
-        screenshotData = {
-          dataURI: 'data:image/png;base64,' + image.toPNG().toString('base64'),
-          width: size.width,
-          height: size.height,
-          dpr: dpr
-        };
-
-        if (!captured && targetWindow && !targetWindow.isDestroyed()) {
-          targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+        // Settle delay: Figma renders its prototype asynchronously well after
+        // the DOM is ready; other pages just need a short paint settle.
+        const settle = (mode === 'figma') ? 3000 : 400;
+        if (mode === 'figma') {
+          sendStatus('Preparing Figma prototype… (a few seconds)', { loading: true });
         }
+        await delay(settle);
+        if (!stillActive()) return;
+
+        const wallMs = Date.now();
+        const perfMs = await thisWindow.webContents.executeJavaScript('performance.now()');
+        if (!stillActive()) return;
+        sessionId = uuidv4();
+        sessionStart = { wallMs: wallMs, perfMs: perfMs };
+        pageName = thisWindow.webContents.getTitle() || '';
+
+        await captureScreenshot();
+        if (!stillActive()) return;
+
+        // Notify the in-page preload so it removes its loading overlay. For
+        // file/url that signal installs the DOM click listener; for figma the
+        // cross-origin click is captured by the injected overlay instead (the
+        // preload's document listener can't see iframe clicks).
+        thisWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
+        // The Figma overlay swallows a single click — only usable for the
+        // first-click test, where the test ends on that click anyway.
+        if (mode === 'figma' && testType === 'first-click') {
+          installFigmaCapture(thisWindow.webContents);
+        }
+        if (testType === 'exploratory') {
+          sendStatus('Recording — interact freely, then click “I think I completed the task”.', { armed: true });
+        } else {
+          sendStatus('Ready — make your first click in the prototype window.', { armed: true });
+        }
+        firstArmDone = true;
       } catch (err) {
-        // Non-fatal: if the re-arm fails the tester can still try to interact;
-        // worst case the overlay stays up and we fall back to loading again.
+        sendStatus('Error preparing session: ' + err.message, { error: true });
       } finally {
-        rearmInProgress = false;
+        arming = false;
       }
       return;
     }
-    armed = true;
+
+    // ---- Re-arm after an in-prototype navigation ----
+    // The destination page gets a fresh preload that re-shows the loading
+    // overlay, so we must resend session-armed to clear it and reinstall the
+    // listener / End button. Figma is a SPA whose clicks don't fire a
+    // top-frame dom-ready, so it never reaches here. sessionStart is kept so
+    // timing is measured from the very first load.
+    if (captured || mode === 'figma') return;
+    if (!stillActive()) return;
+    arming = true;
     try {
-      // Settle delay: Figma renders its prototype asynchronously well after
-      // the DOM is ready; other pages just need a short paint settle.
-      const settle = (mode === 'figma') ? 3000 : 400;
-      if (mode === 'figma') {
-        sendStatus('Preparing Figma prototype… (a few seconds)', { loading: true });
+      await delay(400); // settle paint on the new page
+      if (captured || !stillActive()) return;
+
+      pageName = thisWindow.webContents.getTitle() || pageName;
+
+      // Re-screenshot only when the new page still represents the start state:
+      // always for first-click (the click lands on the final page), and for
+      // exploratory only before any click is recorded (a splash/loader
+      // redirect). Once exploratory clicks exist, keep the existing screenshot
+      // so those earlier clicks stay aligned to it.
+      const reshoot = (testType === 'first-click') || (exploratoryClicks.length === 0);
+      if (reshoot) {
+        await captureScreenshot();
+        if (captured || !stillActive()) return;
       }
-      await delay(settle);
-      if (!targetWindow || targetWindow.isDestroyed()) return;
 
-      const wallMs = Date.now();
-      const perfMs = await targetWindow.webContents.executeJavaScript('performance.now()');
-      sessionId = uuidv4();
-      sessionStart = { wallMs: wallMs, perfMs: perfMs };
-      pageName = targetWindow.webContents.getTitle() || '';
-
-      // Make the loading overlay invisible (but still click-blocking) BEFORE
-      // screenshotting, so the capture shows the real prototype rather than
-      // the "Preparing test…" cover. Using opacity:0 keeps it absorbing
-      // clicks, so the tester still can't interact until session-armed below
-      // removes it and installs the click listener — no clickable gap.
-      await targetWindow.webContents.executeJavaScript(
-        '(function(){var o=document.getElementById("__fct_loading_overlay__");' +
-        'if(o)o.style.opacity="0";return true;})();'
-      );
-      // Give the browser one paint cycle to apply opacity:0 before screenshot.
-      await new Promise(r => setTimeout(r, 80));
-
-      const image = await targetWindow.webContents.capturePage();
-      const size = image.getSize();
-      const dpr = screen.getPrimaryDisplay().scaleFactor || 1;
-
-      screenshotData = {
-        dataURI: 'data:image/png;base64,' + image.toPNG().toString('base64'),
-        width: size.width,
-        height: size.height,
-        dpr: dpr
-      };
-
-      // Always notify the in-page preload so it removes its loading overlay.
-      // For file/url that same signal installs the DOM click listener; for
-      // figma the cross-origin click is captured by the injected overlay
-      // instead (the preload's document listener can't see iframe clicks).
-      targetWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
-      // The Figma overlay swallows a single click — only usable for the
-      // first-click test, where the test ends on that click anyway.
-      if (mode === 'figma' && testType === 'first-click') {
-        installFigmaCapture(targetWindow.webContents);
-      }
-      if (testType === 'exploratory') {
-        sendStatus('Recording — interact freely, then click “I think I completed the task”.', { armed: true });
-      } else {
-        sendStatus('Ready — make your first click in the prototype window.', { armed: true });
-      }
+      thisWindow.webContents.send('session-armed', { sessionId, sessionStart, testType, mode });
     } catch (err) {
-      sendStatus('Error preparing session: ' + err.message, { error: true });
+      // Non-fatal: worst case the overlay stays and the tester can reload.
+    } finally {
+      arming = false;
     }
   }
 
@@ -315,7 +327,7 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
   // did-finish-load (which waits for every sub-resource), so the window arms
   // promptly instead of feeling laggy on heavier pages. Using .on (not .once)
   // so exploratory sessions re-arm after each in-prototype navigation.
-  targetWindow.webContents.on('dom-ready', arm);
+  thisWindow.webContents.on('dom-ready', arm);
 
   // If the page can't load (offline, wrong port, bad/dead link), report it
   // instead of leaving the spinner running forever. Main-frame errors only;
@@ -323,17 +335,22 @@ function openTargetWindow(loadFn, testerNameValue, mode, testTypeValue) {
   let loadFailed = false;
   targetWindow.webContents.on('did-fail-load', (e, errorCode, errorDesc, validatedURL, isMainFrame) => {
     if (!isMainFrame || errorCode === -3) return;
+    // Ignore failures from a window that's no longer the active one.
+    if (thisWindow !== targetWindow) return;
     loadFailed = true;
     sendStatus('Could not load: ' + (errorDesc || 'error ' + errorCode) +
       (validatedURL ? ' (' + validatedURL + ')' : ''), { error: true });
-    if (targetWindow && !targetWindow.isDestroyed()) {
-      targetWindow.close();
+    if (!thisWindow.isDestroyed()) {
+      thisWindow.close();
     }
   });
 
   loadFn(targetWindow);
 
-  targetWindow.on('closed', () => {
+  thisWindow.on('closed', () => {
+    // Only react if this is still the active window — a stale 'closed' from a
+    // previously-replaced window must not clobber the new session's state.
+    if (thisWindow !== targetWindow) return;
     targetWindow = null;
     // If the window closed before a click was captured, let the app UI
     // recover (re-enable inputs, hide the close button) instead of staying
