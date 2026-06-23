@@ -80,7 +80,7 @@ function btoa64(str) {
 function createAppWindow() {
   appWindow = new BrowserWindow({
     width: 560,
-    height: 480,
+    height: 600,
     resizable: true,
     title: 'First Click Tracker',
     webPreferences: {
@@ -92,6 +92,7 @@ function createAppWindow() {
 
   appWindow.setMenuBarVisibility(false);
   appWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  appWindow.webContents.openDevTools({ mode: 'detach' });
 
   appWindow.on('closed', () => {
     appWindow = null;
