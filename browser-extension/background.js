@@ -36,8 +36,12 @@ function buildFilename(tester, page, wallMs) {
 }
 
 function btoa64(str) {
-  var bytes = unescape(encodeURIComponent(str));
-  return btoa(bytes);
+  var bytes = new TextEncoder().encode(str);
+  var binary = '';
+  for (var i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 /* ---- Capture screenshot of active tab ---- */
