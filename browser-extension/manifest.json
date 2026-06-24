@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "First Click Tracker",
+  "version": "1.0.0",
+  "description": "Record first-click and exploratory usability tests on any prototype URL.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "tabs",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "First Click Tracker"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/sha256.js", "lib/canonical.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/sha256.js", "lib/canonical.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

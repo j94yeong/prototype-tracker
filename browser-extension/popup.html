@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>First Click Tracker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #fff;
+    width: 300px;
+    padding: 20px;
+    color: #111;
+  }
+  h1 { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: #888; margin-bottom: 16px; }
+
+  /* Steps */
+  .step { display: none; }
+  .step.active { display: block; }
+
+  /* Type cards */
+  .type-card {
+    border: 1.5px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    cursor: pointer;
+    margin-bottom: 10px;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .type-card:hover { border-color: #4f8ef7; background: #f7faff; }
+  .type-title { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
+  .type-desc { font-size: 11px; color: #888; line-height: 1.4; }
+
+  label { display: block; font-size: 12px; color: #444; margin-bottom: 5px; font-weight: 500; }
+  input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    border: 1.5px solid #ddd;
+    border-radius: 6px;
+    outline: none;
+    margin-bottom: 12px;
+    color: #111;
+  }
+  input[type="text"]:focus { border-color: #4f8ef7; }
+
+  .btn {
+    width: 100%;
+    padding: 10px;
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    border-radius: 7px;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  .btn-primary { background: #4f8ef7; color: #fff; }
+  .btn-primary:hover { background: #3a7ae0; }
+  .btn-primary:disabled { background: #bcd2f5; cursor: not-allowed; }
+  .btn-back { background: none; color: #4f8ef7; font-size: 12px; font-weight: 600;
+    width: auto; padding: 0; margin-bottom: 12px; text-align: left; cursor: pointer; border: none; }
+  .btn-back:hover { text-decoration: underline; }
+
+  #status {
+    font-size: 12px;
+    margin-top: 8px;
+    line-height: 1.5;
+    min-height: 16px;
+  }
+  #status.error { color: #c0392b; }
+  #status.success { color: #1a8040; font-weight: 600; }
+  #status.info { color: #4f8ef7; }
+
+  /* Active session panel */
+  #session-info {
+    background: #f0f7ff;
+    border: 1.5px solid #c3d9f7;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #333;
+  }
+  #session-info strong { color: #1a5cb0; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #1a8040; margin-right: 6px; animation: pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+</style>
+</head>
+<body>
+  <h1>First Click Tracker</h1>
+  <div class="sub" id="sub-text">Choose a test type to begin.</div>
+
+  <!-- Step 1: choose test type -->
+  <div class="step active" id="step-type">
+    <div class="type-card" data-type="first-click">
+      <div class="type-title">First Click Test</div>
+      <div class="type-desc">Captures where the tester clicks first and how long it took.</div>
+    </div>
+    <div class="type-card" data-type="exploratory">
+      <div class="type-title">Exploratory Test</div>
+      <div class="type-desc">Records every click until the tester presses "I completed the task".</div>
+    </div>
+  </div>
+
+  <!-- Step 2: tester name + start -->
+  <div class="step" id="step-start">
+    <button class="btn-back" id="back-btn">Back</button>
+    <label for="tester-name">Tester name (optional)</label>
+    <input type="text" id="tester-name" placeholder="e.g. Jane Smith">
+    <button class="btn btn-primary" id="start-btn">Start Test</button>
+  </div>
+
+  <!-- Step 3: session active -->
+  <div class="step" id="step-active">
+    <div id="session-info">
+      <span class="dot"></span><strong id="active-type-label">Recording</strong><br>
+      Tester: <span id="active-tester">—</span>
+    </div>
+    <div id="active-instructions" style="font-size:12px;color:#555;margin-bottom:12px;line-height:1.5;"></div>
+    <button class="btn btn-primary" id="stop-btn" style="background:#c0392b;">Stop &amp; Discard</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
