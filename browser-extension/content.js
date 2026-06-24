@@ -1,16 +1,25 @@
 'use strict';
 
 (function () {
-  /* Only inject once per page load */
+  /* Only inject once per frame load */
   if (window.__fctContentLoaded) return;
   window.__fctContentLoaded = true;
+
+  /* This script runs in EVERY frame (manifest all_frames). The top frame talks
+   * to the background and owns the screenshot's coordinate space; sub-frames
+   * (including cross-origin iframes such as Figma embeds) can't reach the
+   * background's click coordinates meaningfully on their own, so they forward
+   * each click UP to their parent via postMessage. Each parent adds the child
+   * iframe's on-screen offset, so by the time a click reaches the top frame it
+   * is expressed in top-viewport coordinates that line up with the capture. */
+  var isTop = (window === window.top);
 
   var armed = false;
   var testType = 'first-click';
 
   var END_BTN_ID = '__fct_end_button__';
-  var exploratoryBound = false;
   var firstClickPending = false; // guards against double-send while awaiting ack
+  var FCT_MSG = '__fct_click__';
 
   /* ---- Selector builder ---- */
   function buildSelector(el) {
@@ -25,7 +34,7 @@
     return sel;
   }
 
-  /* ---- Build click payload ---- */
+  /* ---- Build click payload (coordinates relative to THIS frame) ---- */
   function buildClickPayload(e) {
     var x = e.clientX, y = e.clientY;
     var vw = window.innerWidth, vh = window.innerHeight;
@@ -49,57 +58,117 @@
    * the browser begins navigating to the next page. The content script (and
    * its pending sendMessage) is then torn down before the message is
    * delivered, so clicks that navigate get silently dropped. pointerdown
-   * fires on press — a beat before navigation starts — giving the message
-   * time to reach the background. Only the primary button (0) counts; right /
-   * middle clicks and multi-touch are ignored. */
+   * fires on press — a beat before navigation starts. Only the primary button
+   * (0) counts; right / middle clicks and multi-touch are ignored. */
   function isPrimary(e) {
     return e.button === 0 || e.button === undefined;
   }
 
-  /* ---- First-click handler ----
-   * Keep the listener installed until the background confirms it saved the
-   * click. The service worker may be cold-started by this very message and
-   * occasionally drop it; detaching first (as before) would silently lose the
-   * only click and strand the session. On a failed/empty ack we leave the
-   * listener armed so the next click retries; on success we detach. */
-  function onFirstClick(e) {
-    if (!armed || testType !== 'first-click') return;
-    if (!isPrimary(e)) return;
+  /* ---- Top frame: deliver a finished payload to the background ----
+   * For first-click, keep listening until the background confirms it saved:
+   * the service worker may be cold-started by this very message and drop it,
+   * so detaching first would silently lose the only click. */
+  function deliverFirstClick(payload) {
     if (firstClickPending) return;
     firstClickPending = true;
     chrome.runtime.sendMessage(
-      { action: 'first-click-captured', click: buildClickPayload(e) },
+      { action: 'first-click-captured', click: payload },
       function (resp) {
         if (chrome.runtime.lastError || !resp || !resp.ok) {
           firstClickPending = false; // delivery failed — allow a retry
           return;
         }
-        armed = false;
-        document.removeEventListener('pointerdown', onFirstClick, true);
+        armed = false; // captured; stop accepting clicks from any frame
       }
     );
   }
 
-  /* ---- Exploratory handlers ---- */
-  function onExploratoryClick(e) {
-    if (!armed || testType !== 'exploratory') return;
+  function routeTopPayload(payload) {
+    if (!armed) return;
+    if (testType === 'first-click') deliverFirstClick(payload);
+    else chrome.runtime.sendMessage({ action: 'exploratory-click', click: payload });
+  }
+
+  /* ---- Emit a payload upward: to the background if top, else to the parent
+   * frame, which will add this frame's offset and continue up the chain. ---- */
+  function emitPayload(payload) {
+    if (isTop) {
+      routeTopPayload(payload);
+    } else {
+      try { window.parent.postMessage({ __fct: FCT_MSG, payload: payload }, '*'); } catch (e) { /* noop */ }
+    }
+  }
+
+  /* ---- Local pointerdown in THIS frame ---- */
+  function onPoint(e) {
+    if (!armed) return;
     if (!isPrimary(e)) return;
+    // Never record clicks on our own End button.
     var node = e.target;
     while (node) {
       if (node.id === END_BTN_ID) return;
       node = node.parentNode;
     }
-    chrome.runtime.sendMessage({ action: 'exploratory-click', click: buildClickPayload(e) });
+    emitPayload(buildClickPayload(e));
   }
 
-  function installExploratoryListener() {
-    if (exploratoryBound) return;
-    exploratoryBound = true;
-    document.addEventListener('pointerdown', onExploratoryClick, true);
+  /* ---- Relay clicks bubbling up from child frames ----
+   * Translate the child's frame-relative coordinates into this frame's
+   * coordinates by adding the child iframe element's content-box offset, then
+   * pass it further up. Only accept messages whose source is one of our own
+   * child frames (unknown senders are ignored). ---- */
+  window.addEventListener('message', function (ev) {
+    var d = ev.data;
+    if (!d || d.__fct !== FCT_MSG || !d.payload) return;
+
+    var rect = null, cs = null;
+    var frames = document.querySelectorAll('iframe, frame');
+    for (var i = 0; i < frames.length; i++) {
+      var cw;
+      try { cw = frames[i].contentWindow; } catch (err) { cw = null; }
+      if (cw && cw === ev.source) {
+        rect = frames[i].getBoundingClientRect();
+        try { cs = window.getComputedStyle(frames[i]); } catch (err2) { cs = null; }
+        break;
+      }
+    }
+    if (!rect) return; // not from a frame we own
+
+    // Content origin sits inside the border + padding of the iframe element.
+    var bl = cs ? (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0) : 0;
+    var bt = cs ? (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.paddingTop) || 0) : 0;
+
+    var p = d.payload;
+    p.x = p.x + rect.left + bl;
+    p.y = p.y + rect.top + bt;
+    p.viewportW = window.innerWidth;
+    p.viewportH = window.innerHeight;
+    p.xPct = (p.x / p.viewportW) * 100;
+    p.yPct = (p.y / p.viewportH) * 100;
+    emitPayload(p);
+  }, false);
+
+  /* ---- Arm / disarm this frame ----
+   * addEventListener with the same function reference is idempotent, so
+   * arming more than once (broadcast + self-arm) is harmless. ---- */
+  function armFrame(type) {
+    armed = true;
+    testType = type || 'first-click';
+    firstClickPending = false;
+    document.addEventListener('pointerdown', onPoint, true);
+    if (isTop && testType === 'exploratory') showEndButton();
   }
 
-  /* ---- End button (exploratory) ---- */
+  function disarmFrame() {
+    armed = false;
+    firstClickPending = false;
+    document.removeEventListener('pointerdown', onPoint, true);
+    removeEndButton();
+  }
+
+  /* ---- End button (top frame only, exploratory) ---- */
   function showEndButton() {
+    if (!isTop) return;
     if (document.getElementById(END_BTN_ID)) return;
     var root = document.documentElement || document.body;
     if (!root) return;
@@ -121,23 +190,19 @@
       btn.textContent = 'Saving...';
       btn.style.background = '#888';
       btn.style.cursor = 'default';
-      document.removeEventListener('pointerdown', onExploratoryClick, true);
-      exploratoryBound = false;
+      armed = false; // stop recording while the save is in flight
       chrome.runtime.sendMessage(
         { action: 'exploratory-end', endWallMs: Date.now(), endPerfMs: performance.now() },
         function (resp) {
           if (chrome.runtime.lastError || !resp || !resp.ok) {
             // Save did not go through (e.g. the worker dropped the message on a
-            // cold start). Re-arm the button + click listener so the tester can
-            // finish again rather than losing the whole session silently.
+            // cold start). Re-arm so the tester can finish again rather than
+            // losing the whole session silently.
+            armed = true;
             btn.disabled = false;
             btn.textContent = 'I think I completed the task ✓';
             btn.style.background = '#1a8040';
             btn.style.cursor = 'pointer';
-            if (!exploratoryBound) {
-              exploratoryBound = true;
-              document.addEventListener('pointerdown', onExploratoryClick, true);
-            }
             return;
           }
           // Confirmed saved — remove the button.
@@ -162,29 +227,28 @@
     }
 
     if (msg.action === 'session-armed') {
-      armed = true;
-      testType = msg.testType || 'first-click';
-      if (testType === 'exploratory') {
-        installExploratoryListener();
-        showEndButton();
-      } else {
-        firstClickPending = false;
-        document.addEventListener('pointerdown', onFirstClick, true);
-      }
+      armFrame(msg.testType);
       sendResponse({ ok: true });
       return true;
     }
 
     if (msg.action === 'session-reset') {
-      armed = false;
-      exploratoryBound = false;
-      firstClickPending = false;
-      document.removeEventListener('pointerdown', onFirstClick, true);
-      document.removeEventListener('pointerdown', onExploratoryClick, true);
-      removeEndButton();
+      disarmFrame();
       sendResponse({ ok: true });
       return true;
     }
   });
+
+  /* ---- Self-arm on load ----
+   * A frame can miss the session-armed broadcast — most importantly a
+   * cross-origin or lazily-loaded iframe that attaches after the session
+   * started — so ask the background whether a session is active. Idempotent
+   * with the broadcast. ---- */
+  try {
+    chrome.runtime.sendMessage({ action: 'frame-check' }, function (state) {
+      if (chrome.runtime.lastError) return;
+      if (state && state.running) armFrame(state.testType);
+    });
+  } catch (e) { /* extension context not available */ }
 
 })();

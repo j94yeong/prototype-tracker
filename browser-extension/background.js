@@ -99,8 +99,8 @@ function captureTab(tabId) {
 /* ---- Inject content script (in case it missed the declarative injection) ---- */
 function ensureContentScript(tabId) {
   return chrome.scripting.executeScript({
-    target: { tabId: tabId },
-    files: ['lib/sha256.js', 'lib/canonical.js', 'content.js']
+    target: { tabId: tabId, allFrames: true },
+    files: ['content.js']
   }).catch(function () { /* already injected */ });
 }
 
@@ -176,14 +176,32 @@ function saveSession(data, pageName) {
   chrome.downloads.download({ url: dataUrl, filename: filename, saveAs: false });
 }
 
-/* ---- Async message handler ---- */
-function handleMessage(msg) {
+/* ---- Is this message from a frame of the session's own tab? ----
+ * Click and end messages, and a frame's self-arm check, must be scoped to the
+ * tab under test. The session is global, so without this a frame in another
+ * tab could arm itself and record clicks into the running session. Messages
+ * from the popup have no sender.tab and never match. */
+function fromSessionTab(s, sender) {
+  return !!(s && sender && sender.tab && sender.tab.id === s.tabId);
+}
 
-  /* Popup: get current state */
+/* ---- Async message handler ---- */
+function handleMessage(msg, sender) {
+
+  /* Popup: get current state (not tab-scoped — the popup drives any tab) */
   if (msg.action === 'get-state') {
     return getSession().then(function (s) {
       return s ? { running: true, testType: s.testType, testerName: s.testerName }
                : { running: false };
+    });
+  }
+
+  /* Content frame: should I arm? Only if I belong to the session's tab. */
+  if (msg.action === 'frame-check') {
+    return getSession().then(function (s) {
+      return fromSessionTab(s, sender)
+        ? { running: true, testType: s.testType }
+        : { running: false };
     });
   }
 
@@ -239,6 +257,7 @@ function handleMessage(msg) {
   if (msg.action === 'first-click-captured') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'first-click') return { ok: false };
+      if (!fromSessionTab(s, sender)) return { ok: false };
       return getShots().then(function (shots) {
         var shot = shots[0] || '';
         return clearAll().then(function () {
@@ -278,6 +297,7 @@ function handleMessage(msg) {
   if (msg.action === 'exploratory-click') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'exploratory') return { ok: false };
+      if (!fromSessionTab(s, sender)) return { ok: false };
       return getShots().then(function (shots) {
         // Tag the click with the page it happened on and its time offset, so
         // the viewer can place it on the right screenshot and label it.
@@ -293,6 +313,7 @@ function handleMessage(msg) {
   if (msg.action === 'exploratory-end') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'exploratory') return { ok: false };
+      if (!fromSessionTab(s, sender)) return { ok: false };
       return getShots().then(function (shots) {
         return clearAll().then(function () {
           var endWallMs = msg.endWallMs || Date.now();
@@ -364,7 +385,7 @@ function serialize(fn) {
 }
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-  serialize(function () { return handleMessage(msg); })
+  serialize(function () { return handleMessage(msg, sender); })
     .then(sendResponse, function () { sendResponse(undefined); });
   return true; // keep the message channel open for the async response
 });
