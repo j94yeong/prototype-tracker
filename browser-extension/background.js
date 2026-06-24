@@ -69,14 +69,49 @@ function ensureContentScript(tabId) {
   }).catch(function () { /* already injected */ });
 }
 
-/* ---- Sign and download a .fct file ---- */
-function saveSession(data) {
+/* ---- Tell the active content script to arm itself ---- */
+function sendArmed() {
+  if (!session) return;
+  chrome.tabs.sendMessage(session.tabId, {
+    action: 'session-armed',
+    sessionId: session.sessionId,
+    sessionStart: session.sessionStart,
+    testType: session.testType
+  }).catch(function () { /* content not ready yet */ });
+}
+
+/* ---- Re-arm after an in-prototype navigation ----
+ * A navigation loads a fresh content script that is not armed, so for
+ * exploratory the End button + click listener would vanish (tester stuck),
+ * and for first-click the new page would not capture. We re-arm on every
+ * completed navigation of the session tab. The start screenshot is only
+ * re-taken when it still represents the start state: always for first-click
+ * (no click yet), and for exploratory only before the first click, so click
+ * hotspots stay aligned to the page they happened on. */
+function rearmAfterNavigation() {
+  if (!session) return;
+  var reshoot = (session.testType === 'first-click') ||
+    (session.exploratoryClicks.length === 0);
+  if (reshoot) {
+    captureTab(session.tabId).then(function (shot) {
+      if (session) session.screenshotDataUrl = shot;
+      sendArmed();
+    }).catch(function () { sendArmed(); });
+  } else {
+    sendArmed();
+  }
+}
+
+/* ---- Sign and download a .fct file ----
+ * pageName is used only for the download filename; it is NOT part of the
+ * signed data, so the signed field set matches viewer.html exactly. */
+function saveSession(data, pageName) {
   var sig = sha256hex(canonicalJSON(data) + '|' + SECRET);
   data.integrity = { alg: 'sha256', sig: sig };
   var json = JSON.stringify(data, null, 2);
   var b64 = btoa64(json);
   var dataUrl = 'data:application/octet-stream;base64,' + b64;
-  var filename = buildFilename(data.testerName, data.pageName || '', data.sessionStart.wallMs);
+  var filename = buildFilename(data.testerName, pageName || '', data.sessionStart.wallMs);
   chrome.downloads.download({ url: dataUrl, filename: filename, saveAs: false });
 }
 
@@ -128,14 +163,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
       /* Ask the content script for its perfNow, then arm it */
       chrome.tabs.sendMessage(tabId, { action: 'get-perf-now' }, function (resp) {
+        if (chrome.runtime.lastError) { /* content not ready; arm anyway */ }
         if (session) {
           session.sessionStart.perfMs = (resp && resp.perfMs) ? resp.perfMs : 0;
-          chrome.tabs.sendMessage(tabId, {
-            action: 'session-armed',
-            sessionId: session.sessionId,
-            sessionStart: session.sessionStart,
-            testType: testType
-          });
+          sendArmed();
         }
       });
 
@@ -168,7 +199,6 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       schemaVersion: 1,
       sessionId: s.sessionId,
       testerName: s.testerName,
-      pageName: s.pageName,
       sessionStart: s.sessionStart,
       click: {
         wallMs: msg.click.wallMs,
@@ -190,7 +220,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         dpr: 1
       }
     };
-    saveSession(data);
+    saveSession(data, s.pageName);
     sendResponse({ ok: true });
     return true;
   }
@@ -210,15 +240,18 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     resetSession();
 
     var endWallMs = msg.endWallMs || Date.now();
+    var endPerfMs = msg.endPerfMs || 0;
     var data = {
       schemaVersion: 1,
       testType: 'exploratory',
       sessionId: s.sessionId,
       testerName: s.testerName,
-      pageName: s.pageName,
       sessionStart: s.sessionStart,
-      sessionEnd: { wallMs: endWallMs },
-      durationMs: endWallMs - s.sessionStart.wallMs,
+      sessionEnd: {
+        wallMs: endWallMs,
+        perfMs: endPerfMs,
+        durationMs: endWallMs - s.sessionStart.wallMs
+      },
       clicks: s.exploratoryClicks,
       screenshot: {
         dataURI: s.screenshotDataUrl,
@@ -227,10 +260,19 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         dpr: 1
       }
     };
-    saveSession(data);
+    saveSession(data, s.pageName);
     sendResponse({ ok: true });
     return true;
   }
+});
+
+/* ---- Re-arm when the session tab finishes loading a new page ---- */
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+  if (!session || session.tabId !== tabId) return;
+  if (changeInfo.status !== 'complete') return;
+  // The manifest auto-injects content.js on the new page; make sure it is
+  // there, then re-arm so the listener / End button come back.
+  ensureContentScript(tabId).then(rearmAfterNavigation);
 });
 
 /* ---- Clean up if the session tab is closed ---- */

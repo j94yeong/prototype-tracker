@@ -92,7 +92,7 @@
       btn.style.cursor = 'default';
       document.removeEventListener('click', onExploratoryClick, true);
       exploratoryBound = false;
-      chrome.runtime.sendMessage({ action: 'exploratory-end', endWallMs: Date.now() });
+      chrome.runtime.sendMessage({ action: 'exploratory-end', endWallMs: Date.now(), endPerfMs: performance.now() });
       setTimeout(function () {
         if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
       }, 1500);
