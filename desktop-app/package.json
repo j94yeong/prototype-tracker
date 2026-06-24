@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "Native desktop app that loads a prototype's index.html, captures the first click, and exports a signed .fct session file compatible with the existing viewer.html.",
   "main": "main.js",
+  "author": "JForJYeong",
   "private": true,
   "scripts": {
     "dev": "electron .",
@@ -15,8 +16,9 @@
     "electron-builder": "^24.13.3"
   },
   "build": {
-    "appId": "com.prototypetracker.app",
+    "appId": "com.jforjyeong.firstclicktracker",
     "productName": "First Click Tracker",
+    "copyright": "Copyright © 2025 JForJYeong",
     "files": [
       "main.js",
       "preload-app.js",

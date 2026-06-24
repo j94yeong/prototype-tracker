@@ -9,10 +9,11 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #f5f5f7;
     color: #111;
-    height: 100vh;
+    min-height: 100vh;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
+    padding: 24px 16px;
   }
   #card {
     width: 480px;
@@ -133,12 +134,49 @@
   }
   #status.success { color: #1a8040; font-weight: 600; }
   #status.error { color: #c0392b; }
+
+  /* Step 1: test type chooser */
+  #step-type { display: flex; flex-direction: column; gap: 12px; }
+  .type-card {
+    border: 1.5px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 16px 18px;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .type-card:hover { border-color: #4f8ef7; background: #f7faff; }
+  .type-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .type-desc { font-size: 12.5px; color: #888; line-height: 1.5; }
+
+  #back-btn {
+    background: none; color: #4f8ef7; font-size: 13px; font-weight: 600;
+    width: auto; padding: 0; margin-bottom: 16px; text-align: left;
+  }
+  #back-btn:hover { text-decoration: underline; background: none; }
+
+
 </style>
 </head>
 <body>
   <div id="card">
     <h1>First Click Tracker <span id="app-version" style="font-size:12px;font-weight:500;color:#bbb;"></span></h1>
-    <div class="sub">Load a prototype, name the tester (optional), then watch for their first click.</div>
+    <div class="sub" id="sub-text">Choose a test type to begin.</div>
+
+    <!-- Step 1: choose test type -->
+    <div id="step-type">
+      <div class="type-card" data-type="first-click">
+        <div class="type-title">🎯 First Click Test</div>
+        <div class="type-desc">Capture where the tester clicks first and how long it took. The test ends on that first click.</div>
+      </div>
+      <div class="type-card" data-type="exploratory">
+        <div class="type-title">🧭 Exploratory Test</div>
+        <div class="type-desc">Let the tester explore freely. Records every click and the total time until they press “I think I completed the task”.</div>
+      </div>
+    </div>
+
+    <!-- Step 2: choose channel -->
+    <div id="step-channel" style="display:none">
+    <button id="back-btn" type="button">← Choose a different test type</button>
 
     <div id="tabs">
       <button class="tab-btn active" data-tab="file">File / Image</button>
@@ -187,6 +225,8 @@
     </div>
 
     <button id="reset-btn">Close prototype window</button>
+    </div><!-- /step-channel -->
+
     <div id="status-row">
       <div id="spinner"></div>
       <div id="status"></div>

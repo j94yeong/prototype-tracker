@@ -28,10 +28,7 @@ function buildSelector(el) {
   return sel;
 }
 
-function onFirstClick(e) {
-  document.removeEventListener('click', onFirstClick, true);
-  clickHandlerBound = false;
-
+function buildClickPayload(e) {
   const wallMs = Date.now();
   const perfMs = performance.now();
 
@@ -47,7 +44,7 @@ function onFirstClick(e) {
     targetText = '';
   }
 
-  ipcRenderer.send('first-click-captured', {
+  return {
     wallMs: wallMs,
     perfMs: perfMs,
     x: x,
@@ -58,13 +55,71 @@ function onFirstClick(e) {
     viewportH: viewportH,
     targetSelector: buildSelector(e.target),
     targetText: targetText
-  });
+  };
+}
+
+function onFirstClick(e) {
+  document.removeEventListener('click', onFirstClick, true);
+  clickHandlerBound = false;
+  ipcRenderer.send('first-click-captured', buildClickPayload(e));
 }
 
 function installClickListener() {
   if (clickHandlerBound) return;
   clickHandlerBound = true;
   document.addEventListener('click', onFirstClick, true);
+}
+
+/* ---- Exploratory mode: capture every click + a floating End button ----
+ * Unlike first-click, the listener stays attached and forwards each click
+ * to the main process. A floating "I think I completed the task" button
+ * (appended to <html> so it survives body rebuilds, max z-index so it's
+ * always reachable) ends the session and triggers the save. */
+const END_BTN_ID = '__fct_end_button__';
+let exploratoryBound = false;
+
+function onExploratoryClick(e) {
+  // Never record clicks on our own End button.
+  let node = e.target;
+  while (node) {
+    if (node.id === END_BTN_ID) return;
+    node = node.parentNode;
+  }
+  ipcRenderer.send('exploratory-click', buildClickPayload(e));
+}
+
+function installExploratoryClickListener() {
+  if (exploratoryBound) return;
+  exploratoryBound = true;
+  document.addEventListener('click', onExploratoryClick, true);
+}
+
+function showEndButton() {
+  if (document.getElementById(END_BTN_ID)) return;
+  const root = document.documentElement || document.body;
+  if (!root) return;
+  const btn = document.createElement('button');
+  btn.id = END_BTN_ID;
+  btn.type = 'button';
+  btn.textContent = 'I think I completed the task ✓';
+  btn.setAttribute('style', [
+    'position:fixed', 'top:16px', 'right:16px', 'z-index:2147483647',
+    'padding:10px 16px', 'font-size:13px', 'font-weight:700',
+    'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+    'color:#fff', 'background:#1a8040', 'border:none', 'border-radius:8px',
+    'box-shadow:0 4px 14px rgba(0,0,0,0.3)', 'cursor:pointer'
+  ].join(';'));
+  btn.addEventListener('click', function (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    btn.style.background = '#888';
+    btn.style.cursor = 'default';
+    document.removeEventListener('click', onExploratoryClick, true);
+    ipcRenderer.send('exploratory-end', { wallMs: Date.now(), perfMs: performance.now() });
+  }, true);
+  root.appendChild(btn);
 }
 
 /* ---- Loading overlay ----
@@ -108,10 +163,35 @@ document.addEventListener('DOMContentLoaded', showLoadingOverlay);
 
 // Main process tells us once the screenshot + sessionStart have been
 // captured, so we don't start listening for clicks before that's ready.
-ipcRenderer.on('session-armed', () => {
+ipcRenderer.on('session-armed', (event, payload) => {
   armed = true;
+  const testType = (payload && payload.testType) || 'first-click';
+  const mode = (payload && payload.mode) || 'file';
   removeLoadingOverlay();
-  installClickListener();
+  if (testType === 'exploratory') {
+    // Figma renders inside a cross-origin iframe we can't read DOM clicks
+    // from, so there we only show the End button (duration + start
+    // screenshot); DOM modes capture every click.
+    if (mode !== 'figma') installExploratoryClickListener();
+    showEndButton();
+  } else {
+    installClickListener();
+  }
+});
+
+// Save dialog was cancelled in exploratory mode — re-enable the End button
+// and resume capturing clicks so the session can be saved again without
+// having to redo the whole exploration.
+ipcRenderer.on('enable-end-button', () => {
+  const btn = document.getElementById(END_BTN_ID);
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = 'I think I completed the task ✓';
+    btn.style.background = '#1a8040';
+    btn.style.cursor = 'pointer';
+  }
+  exploratoryBound = false;
+  installExploratoryClickListener();
 });
 
 // Expose a tiny, harmless bridge in case the renderer wants to check

@@ -24,7 +24,14 @@
   var panelUrl       = document.getElementById('panel-url');
   var panelFigma     = document.getElementById('panel-figma');
 
+  var stepType       = document.getElementById('step-type');
+  var stepChannel    = document.getElementById('step-channel');
+  var backBtn        = document.getElementById('back-btn');
+  var typeCards      = document.querySelectorAll('.type-card');
+  var subText        = document.getElementById('sub-text');
+
   var selectedFilePath = null;
+  var selectedTestType = null;
 
   /* ---- Show app version in header (best-effort; never block listeners) ---- */
   var versionEl = document.getElementById('app-version');
@@ -33,6 +40,48 @@
       if (v) versionEl.textContent = 'v' + v;
     }).catch(function () { /* ignore */ });
   }
+
+  /* ---- Step 1: pick a test type, then reveal the channel step ---- */
+  var figmaTabBtn = document.querySelector('.tab-btn[data-tab=figma]');
+
+  function applyTestTypeUI() {
+    var explore = selectedTestType === 'exploratory';
+    var label = explore ? 'Start session' : 'Load Prototype';
+    loadFileBtn.textContent = label;
+    loadUrlBtn.textContent = label;
+    loadFigmaBtn.textContent = label;
+    subText.textContent = explore
+      ? 'Exploratory test - records every click until the tester ends the session.'
+      : 'First-click test - captures where the tester clicks first.';
+
+    // Figma is not supported for exploratory: hide its tab entirely.
+    // If the user was already on that tab, fall back to File.
+    figmaTabBtn.style.display = explore ? 'none' : '';
+    if (explore && panelFigma.classList.contains('active')) {
+      tabBtns.forEach(function (b) { b.classList.remove('active'); });
+      document.querySelector('.tab-btn[data-tab=file]').classList.add('active');
+      panelFile.classList.add('active');
+      panelUrl.classList.remove('active');
+      panelFigma.classList.remove('active');
+    }
+  }
+
+  typeCards.forEach(function (card) {
+    card.addEventListener('click', function () {
+      selectedTestType = card.getAttribute('data-type');
+      stepType.style.display = 'none';
+      stepChannel.style.display = 'block';
+      applyTestTypeUI();
+      setStatus('');
+    });
+  });
+
+  backBtn.addEventListener('click', function () {
+    stepChannel.style.display = 'none';
+    stepType.style.display = 'flex';
+    selectedTestType = null;
+    setStatus('');
+  });
 
   /* ---- Tab switching ---- */
   tabBtns.forEach(function (btn) {
@@ -110,11 +159,11 @@
     }
   });
 
-  /* ---- Load via file ---- */
+  /* ---- Shared loader ---- */
   async function runLoad(invokePromise) {
     lockUI();
     showSpinner(true);
-    setStatus('Loading prototype…');
+    setStatus('Loading prototype...');
     var result = await invokePromise;
     if (!result.ok) {
       showSpinner(false);
@@ -127,21 +176,21 @@
 
   loadFileBtn.addEventListener('click', function () {
     if (!selectedFilePath) return;
-    runLoad(window.fctApi.loadPrototype(selectedFilePath, testerNameFile.value.trim()));
+    runLoad(window.fctApi.loadPrototype(selectedFilePath, testerNameFile.value.trim(), selectedTestType));
   });
 
   /* ---- Load via URL ---- */
   loadUrlBtn.addEventListener('click', function () {
     var rawUrl = protoUrlInput.value.trim();
     if (!rawUrl) return;
-    runLoad(window.fctApi.loadPrototypeUrl(rawUrl, testerNameUrl.value.trim()));
+    runLoad(window.fctApi.loadPrototypeUrl(rawUrl, testerNameUrl.value.trim(), selectedTestType));
   });
 
   /* ---- Load via Figma ---- */
   loadFigmaBtn.addEventListener('click', function () {
     var rawUrl = figmaUrlInput.value.trim();
     if (!rawUrl) return;
-    runLoad(window.fctApi.loadPrototypeFigma(rawUrl, testerNameFigma.value.trim()));
+    runLoad(window.fctApi.loadPrototypeFigma(rawUrl, testerNameFigma.value.trim(), selectedTestType));
   });
 
   /* ---- Close prototype window / reset ---- */
@@ -171,4 +220,4 @@
       resetBtn.style.display = 'none';
     }
   });
-})();
+}());
