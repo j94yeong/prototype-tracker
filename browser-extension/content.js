@@ -44,15 +44,29 @@
     };
   }
 
+  /* ---- We capture on pointerdown, not click ----
+   * A click event only completes on button release, which is the same moment
+   * the browser begins navigating to the next page. The content script (and
+   * its pending sendMessage) is then torn down before the message is
+   * delivered, so clicks that navigate get silently dropped. pointerdown
+   * fires on press — a beat before navigation starts — giving the message
+   * time to reach the background. Only the primary button (0) counts; right /
+   * middle clicks and multi-touch are ignored. */
+  function isPrimary(e) {
+    return e.button === 0 || e.button === undefined;
+  }
+
   /* ---- First-click handler ---- */
   function onFirstClick(e) {
-    document.removeEventListener('click', onFirstClick, true);
+    if (!isPrimary(e)) return;
+    document.removeEventListener('pointerdown', onFirstClick, true);
     chrome.runtime.sendMessage({ action: 'first-click-captured', click: buildClickPayload(e) });
     armed = false;
   }
 
   /* ---- Exploratory handlers ---- */
   function onExploratoryClick(e) {
+    if (!isPrimary(e)) return;
     var node = e.target;
     while (node) {
       if (node.id === END_BTN_ID) return;
@@ -64,7 +78,7 @@
   function installExploratoryListener() {
     if (exploratoryBound) return;
     exploratoryBound = true;
-    document.addEventListener('click', onExploratoryClick, true);
+    document.addEventListener('pointerdown', onExploratoryClick, true);
   }
 
   /* ---- End button (exploratory) ---- */
@@ -90,7 +104,7 @@
       btn.textContent = 'Saving...';
       btn.style.background = '#888';
       btn.style.cursor = 'default';
-      document.removeEventListener('click', onExploratoryClick, true);
+      document.removeEventListener('pointerdown', onExploratoryClick, true);
       exploratoryBound = false;
       chrome.runtime.sendMessage({ action: 'exploratory-end', endWallMs: Date.now(), endPerfMs: performance.now() });
       setTimeout(function () {
@@ -121,7 +135,7 @@
         installExploratoryListener();
         showEndButton();
       } else {
-        document.addEventListener('click', onFirstClick, true);
+        document.addEventListener('pointerdown', onFirstClick, true);
       }
       sendResponse({ ok: true });
       return true;
@@ -130,8 +144,8 @@
     if (msg.action === 'session-reset') {
       armed = false;
       exploratoryBound = false;
-      document.removeEventListener('click', onFirstClick, true);
-      document.removeEventListener('click', onExploratoryClick, true);
+      document.removeEventListener('pointerdown', onFirstClick, true);
+      document.removeEventListener('pointerdown', onExploratoryClick, true);
       removeEndButton();
       sendResponse({ ok: true });
       return true;
