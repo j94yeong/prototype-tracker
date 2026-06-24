@@ -284,23 +284,43 @@ function handleMessage(msg) {
   return Promise.resolve(undefined);
 }
 
+/* ---- Serialize all session mutations ----
+ * Every handler does an async read-modify-write on storage. Without
+ * serialization, two rapid exploratory clicks can both read the same
+ * snapshot and the second write clobbers the first (a lost click). A single
+ * in-memory promise chain forces operations to run one at a time. Rapid
+ * events always arrive within one service-worker wake period, so the chain
+ * covers them; across worker restarts events are seconds apart and never
+ * overlap, so nothing is lost when the chain resets. */
+var opChain = Promise.resolve();
+function serialize(fn) {
+  var result = opChain.then(fn, fn);
+  opChain = result.then(function () {}, function () {});
+  return result;
+}
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-  handleMessage(msg).then(sendResponse, function () { sendResponse(undefined); });
+  serialize(function () { return handleMessage(msg); })
+    .then(sendResponse, function () { sendResponse(undefined); });
   return true; // keep the message channel open for the async response
 });
 
 /* ---- Re-arm when the session tab finishes loading a new page ---- */
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
   if (changeInfo.status !== 'complete') return;
-  getSession().then(function (s) {
-    if (!s || s.tabId !== tabId) return;
-    ensureContentScript(tabId).then(rearmAfterNavigation);
+  serialize(function () {
+    return getSession().then(function (s) {
+      if (!s || s.tabId !== tabId) return;
+      return ensureContentScript(tabId).then(rearmAfterNavigation);
+    });
   });
 });
 
 /* ---- Clean up if the session tab is closed ---- */
 chrome.tabs.onRemoved.addListener(function (tabId) {
-  getSession().then(function (s) {
-    if (s && s.tabId === tabId) clearAll();
+  serialize(function () {
+    return getSession().then(function (s) {
+      if (s && s.tabId === tabId) return clearAll();
+    });
   });
 });
