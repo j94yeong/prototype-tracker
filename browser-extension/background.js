@@ -164,8 +164,14 @@ function saveSession(data, pageName) {
   var sig = sha256hex(canonicalJSON(data) + '|' + SECRET);
   data.integrity = { alg: 'sha256', sig: sig };
   var json = JSON.stringify(data, null, 2);
+  // The .fct file must CONTAIN the base64 of the JSON as text, exactly like
+  // the desktop app, so viewer.html can decode it. A `;base64,` data: URL is
+  // decoded by the downloader before writing, which would put raw JSON on
+  // disk and break the viewer's atob(). So we base64 the base64 string: the
+  // download decodes one layer, leaving the base64 text (b64) in the file.
+  // b64 is pure ASCII, so plain btoa is safe here.
   var b64 = btoa64(json);
-  var dataUrl = 'data:application/octet-stream;base64,' + b64;
+  var dataUrl = 'data:application/octet-stream;base64,' + btoa(b64);
   var filename = buildFilename(data.testerName, pageName || '', data.sessionStart.wallMs);
   chrome.downloads.download({ url: dataUrl, filename: filename, saveAs: false });
 }

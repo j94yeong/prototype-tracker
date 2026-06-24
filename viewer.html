@@ -411,9 +411,7 @@
   function processFileContent(text) {
     var session;
     try {
-      // Content is base64 encoded
-      var jsonStr = atob64(text.trim());
-      session = JSON.parse(jsonStr);
+      session = JSON.parse(decodeFct(text));
     } catch (err) {
       alert('Could not parse file: ' + err.message);
       return;
@@ -447,6 +445,16 @@
     } else {
       renderViewer();
     }
+  }
+
+  // Accept either base64-encoded content (desktop app, and the fixed
+  // extension) or raw JSON. Some earlier extension builds wrote the JSON
+  // directly to disk, so files may start with "{". base64 never starts with
+  // "{", making the leading character a reliable discriminator.
+  function decodeFct(text) {
+    var t = text.trim();
+    if (t.charAt(0) === '{') return t; // already raw JSON
+    return atob64(t);                  // base64 -> JSON
   }
 
   function atob64(b64) {
