@@ -94,11 +94,8 @@ startBtn.addEventListener('click', function () {
         setStatus('Error: ' + (resp && resp.error ? resp.error : 'Unknown error'), 'error');
         return;
       }
-      // Focus the prototype tab immediately so the popup closes and the
-      // tester's next click lands on the page, not the browser chrome.
-      chrome.tabs.update(tab.id, { active: true });
-      chrome.windows.update(tab.windowId, { focused: true });
-      window.close();
+      showActiveSession({ running: true, testType: selectedType, testerName: testerName.value.trim() });
+      setStatus('');
     });
   });
 });
