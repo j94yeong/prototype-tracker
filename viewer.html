@@ -440,7 +440,11 @@
     for (var i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    return decodeURIComponent(escape(String.fromCharCode.apply(null, bytes)));
+    // A .fct file embeds a full-page PNG screenshot, so `bytes` can be
+    // hundreds of thousands of elements long. String.fromCharCode.apply with
+    // that many arguments overflows the call stack, and TextDecoder both
+    // avoids that and decodes the UTF-8 byte sequence directly.
+    return new TextDecoder('utf-8').decode(bytes);
   }
 
   function verifySession(session) {
