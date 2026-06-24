@@ -92,7 +92,6 @@ function createAppWindow() {
 
   appWindow.setMenuBarVisibility(false);
   appWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  appWindow.webContents.openDevTools({ mode: 'detach' });
 
   appWindow.on('closed', () => {
     appWindow = null;
