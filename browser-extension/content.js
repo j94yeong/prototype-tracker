@@ -7,10 +7,10 @@
 
   var armed = false;
   var testType = 'first-click';
-  var sessionStart = null;
 
   var END_BTN_ID = '__fct_end_button__';
   var exploratoryBound = false;
+  var firstClickPending = false; // guards against double-send while awaiting ack
 
   /* ---- Selector builder ---- */
   function buildSelector(el) {
@@ -56,16 +56,33 @@
     return e.button === 0 || e.button === undefined;
   }
 
-  /* ---- First-click handler ---- */
+  /* ---- First-click handler ----
+   * Keep the listener installed until the background confirms it saved the
+   * click. The service worker may be cold-started by this very message and
+   * occasionally drop it; detaching first (as before) would silently lose the
+   * only click and strand the session. On a failed/empty ack we leave the
+   * listener armed so the next click retries; on success we detach. */
   function onFirstClick(e) {
+    if (!armed || testType !== 'first-click') return;
     if (!isPrimary(e)) return;
-    document.removeEventListener('pointerdown', onFirstClick, true);
-    chrome.runtime.sendMessage({ action: 'first-click-captured', click: buildClickPayload(e) });
-    armed = false;
+    if (firstClickPending) return;
+    firstClickPending = true;
+    chrome.runtime.sendMessage(
+      { action: 'first-click-captured', click: buildClickPayload(e) },
+      function (resp) {
+        if (chrome.runtime.lastError || !resp || !resp.ok) {
+          firstClickPending = false; // delivery failed — allow a retry
+          return;
+        }
+        armed = false;
+        document.removeEventListener('pointerdown', onFirstClick, true);
+      }
+    );
   }
 
   /* ---- Exploratory handlers ---- */
   function onExploratoryClick(e) {
+    if (!armed || testType !== 'exploratory') return;
     if (!isPrimary(e)) return;
     var node = e.target;
     while (node) {
@@ -106,10 +123,27 @@
       btn.style.cursor = 'default';
       document.removeEventListener('pointerdown', onExploratoryClick, true);
       exploratoryBound = false;
-      chrome.runtime.sendMessage({ action: 'exploratory-end', endWallMs: Date.now(), endPerfMs: performance.now() });
-      setTimeout(function () {
-        if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
-      }, 1500);
+      chrome.runtime.sendMessage(
+        { action: 'exploratory-end', endWallMs: Date.now(), endPerfMs: performance.now() },
+        function (resp) {
+          if (chrome.runtime.lastError || !resp || !resp.ok) {
+            // Save did not go through (e.g. the worker dropped the message on a
+            // cold start). Re-arm the button + click listener so the tester can
+            // finish again rather than losing the whole session silently.
+            btn.disabled = false;
+            btn.textContent = 'I think I completed the task ✓';
+            btn.style.background = '#1a8040';
+            btn.style.cursor = 'pointer';
+            if (!exploratoryBound) {
+              exploratoryBound = true;
+              document.addEventListener('pointerdown', onExploratoryClick, true);
+            }
+            return;
+          }
+          // Confirmed saved — remove the button.
+          if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+        }
+      );
     }, true);
     root.appendChild(btn);
   }
@@ -130,11 +164,11 @@
     if (msg.action === 'session-armed') {
       armed = true;
       testType = msg.testType || 'first-click';
-      sessionStart = msg.sessionStart;
       if (testType === 'exploratory') {
         installExploratoryListener();
         showEndButton();
       } else {
+        firstClickPending = false;
         document.addEventListener('pointerdown', onFirstClick, true);
       }
       sendResponse({ ok: true });
@@ -144,6 +178,7 @@
     if (msg.action === 'session-reset') {
       armed = false;
       exploratoryBound = false;
+      firstClickPending = false;
       document.removeEventListener('pointerdown', onFirstClick, true);
       document.removeEventListener('pointerdown', onExploratoryClick, true);
       removeEndButton();
