@@ -8,7 +8,7 @@
     "scripting",
     "tabs",
     "downloads",
-    "windows"
+    "storage"
   ],
   "host_permissions": [
     "<all_urls>"

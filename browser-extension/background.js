@@ -4,11 +4,36 @@ importScripts('lib/sha256.js', 'lib/canonical.js');
 
 const SECRET = 'TRACKER_SECRET_v1';
 
-/* ---- Session state ---- */
-var session = null; // null when idle
+/* ---- Session state ----
+ * In Manifest V3 the background is a service worker that Chrome terminates
+ * after ~30s of inactivity, wiping any in-memory variable. A test session
+ * can easily span longer than that (a tester reading the page before their
+ * first click, or pausing mid-exploration), so the session MUST be persisted
+ * in chrome.storage.session, which survives worker restarts. The large start
+ * screenshot is kept under a separate key so per-click writes stay cheap. */
+const STORE_KEY = 'fct_session';
+const SHOT_KEY = 'fct_shot';
 
-function resetSession() {
-  session = null;
+function getSession() {
+  return chrome.storage.session.get(STORE_KEY).then(function (o) {
+    return o[STORE_KEY] || null;
+  });
+}
+function putSession(s) {
+  var rec = {}; rec[STORE_KEY] = s;
+  return chrome.storage.session.set(rec);
+}
+function getShot() {
+  return chrome.storage.session.get(SHOT_KEY).then(function (o) {
+    return o[SHOT_KEY] || '';
+  });
+}
+function putShot(dataUrl) {
+  var rec = {}; rec[SHOT_KEY] = dataUrl;
+  return chrome.storage.session.set(rec);
+}
+function clearAll() {
+  return chrome.storage.session.remove([STORE_KEY, SHOT_KEY]);
 }
 
 /* ---- Helpers ---- */
@@ -44,12 +69,18 @@ function btoa64(str) {
   return btoa(binary);
 }
 
-/* ---- Capture screenshot of active tab ---- */
+/* ---- Capture screenshot of the session tab ----
+ * captureVisibleTab grabs the visible tab of the window, so only capture
+ * when the target tab is actually the active tab of its window; otherwise
+ * we would screenshot whatever else the user switched to. */
 function captureTab(tabId) {
   return new Promise(function (resolve, reject) {
     chrome.tabs.get(tabId, function (tab) {
       if (chrome.runtime.lastError || !tab) {
         return reject(new Error('Tab not found'));
+      }
+      if (!tab.active) {
+        return reject(new Error('Tab not active'));
       }
       chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }, function (dataUrl) {
         if (chrome.runtime.lastError) {
@@ -61,7 +92,7 @@ function captureTab(tabId) {
   });
 }
 
-/* ---- Inject content script into tab (in case it missed the declarative injection) ---- */
+/* ---- Inject content script (in case it missed the declarative injection) ---- */
 function ensureContentScript(tabId) {
   return chrome.scripting.executeScript({
     target: { tabId: tabId },
@@ -69,37 +100,32 @@ function ensureContentScript(tabId) {
   }).catch(function () { /* already injected */ });
 }
 
-/* ---- Tell the active content script to arm itself ---- */
-function sendArmed() {
-  if (!session) return;
-  chrome.tabs.sendMessage(session.tabId, {
+/* ---- Tell the content script to arm itself ---- */
+function sendArmed(s) {
+  return chrome.tabs.sendMessage(s.tabId, {
     action: 'session-armed',
-    sessionId: session.sessionId,
-    sessionStart: session.sessionStart,
-    testType: session.testType
+    sessionId: s.sessionId,
+    sessionStart: s.sessionStart,
+    testType: s.testType
   }).catch(function () { /* content not ready yet */ });
 }
 
 /* ---- Re-arm after an in-prototype navigation ----
- * A navigation loads a fresh content script that is not armed, so for
- * exploratory the End button + click listener would vanish (tester stuck),
- * and for first-click the new page would not capture. We re-arm on every
- * completed navigation of the session tab. The start screenshot is only
- * re-taken when it still represents the start state: always for first-click
- * (no click yet), and for exploratory only before the first click, so click
- * hotspots stay aligned to the page they happened on. */
+ * A navigation loads a fresh, un-armed content script, so for exploratory
+ * the End button + click listener would vanish (tester stuck) and for
+ * first-click the new page would not capture. Re-arm on every completed
+ * navigation. Re-take the start screenshot only when it still represents the
+ * start state: always for first-click (no click yet), and for exploratory
+ * only before the first click, so hotspots stay aligned to their page. */
 function rearmAfterNavigation() {
-  if (!session) return;
-  var reshoot = (session.testType === 'first-click') ||
-    (session.exploratoryClicks.length === 0);
-  if (reshoot) {
-    captureTab(session.tabId).then(function (shot) {
-      if (session) session.screenshotDataUrl = shot;
-      sendArmed();
-    }).catch(function () { sendArmed(); });
-  } else {
-    sendArmed();
-  }
+  return getSession().then(function (s) {
+    if (!s) return;
+    var reshoot = (s.testType === 'first-click') || (s.exploratoryClicks.length === 0);
+    var step = reshoot
+      ? captureTab(s.tabId).then(putShot).catch(function () { /* keep old shot */ })
+      : Promise.resolve();
+    return step.then(function () { return sendArmed(s); });
+  });
 }
 
 /* ---- Sign and download a .fct file ----
@@ -115,169 +141,166 @@ function saveSession(data, pageName) {
   chrome.downloads.download({ url: dataUrl, filename: filename, saveAs: false });
 }
 
-/* ---- Message router ---- */
-chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+/* ---- Async message handler ---- */
+function handleMessage(msg) {
 
   /* Popup: get current state */
   if (msg.action === 'get-state') {
-    sendResponse(session ? {
-      running: true,
-      testType: session.testType,
-      testerName: session.testerName
-    } : { running: false });
-    return true;
+    return getSession().then(function (s) {
+      return s ? { running: true, testType: s.testType, testerName: s.testerName }
+               : { running: false };
+    });
   }
 
   /* Popup: start a new session */
   if (msg.action === 'start-session') {
-    if (session) {
-      sendResponse({ ok: false, error: 'A session is already running.' });
-      return true;
-    }
+    return getSession().then(function (existing) {
+      if (existing) return { ok: false, error: 'A session is already running.' };
 
-    var tabId = msg.tabId;
-    var testType = msg.testType || 'first-click';
-    var testerName = msg.testerName || '';
-
-    ensureContentScript(tabId).then(function () {
-      return captureTab(tabId);
-    }).then(function (screenshotDataUrl) {
-      return new Promise(function (resolve, reject) {
-        chrome.tabs.get(tabId, function (tab) {
-          if (chrome.runtime.lastError) return reject(new Error('Tab gone'));
-          resolve({ screenshotDataUrl: screenshotDataUrl, title: tab.title || '' });
-        });
-      });
-    }).then(function (info) {
-      var wallMs = Date.now();
-      session = {
-        sessionId: uuidv4(),
-        tabId: tabId,
-        testType: testType,
-        testerName: testerName,
-        pageName: info.title,
-        sessionStart: { wallMs: wallMs, perfMs: 0 },
-        screenshotDataUrl: info.screenshotDataUrl,
-        exploratoryClicks: []
-      };
-
-      /* Ask the content script for its perfNow, then arm it */
-      chrome.tabs.sendMessage(tabId, { action: 'get-perf-now' }, function (resp) {
-        if (chrome.runtime.lastError) { /* content not ready; arm anyway */ }
-        if (session) {
-          session.sessionStart.perfMs = (resp && resp.perfMs) ? resp.perfMs : 0;
-          sendArmed();
-        }
-      });
-
-      sendResponse({ ok: true });
-    }).catch(function (err) {
-      sendResponse({ ok: false, error: err.message });
+      var tabId = msg.tabId;
+      return ensureContentScript(tabId)
+        .then(function () { return captureTab(tabId); })
+        .then(function (shot) {
+          return chrome.tabs.get(tabId).then(function (tab) {
+            return { shot: shot, title: (tab && tab.title) || '' };
+          });
+        })
+        .then(function (info) {
+          // Best-effort perfMs from the page clock; tolerate a missing reply.
+          return chrome.tabs.sendMessage(tabId, { action: 'get-perf-now' })
+            .catch(function () { return null; })
+            .then(function (resp) {
+              var s = {
+                sessionId: uuidv4(),
+                tabId: tabId,
+                testType: msg.testType || 'first-click',
+                testerName: msg.testerName || '',
+                pageName: info.title,
+                sessionStart: { wallMs: Date.now(), perfMs: (resp && resp.perfMs) ? resp.perfMs : 0 },
+                exploratoryClicks: []
+              };
+              return putShot(info.shot)
+                .then(function () { return putSession(s); })
+                .then(function () { return sendArmed(s); })
+                .then(function () { return { ok: true }; });
+            });
+        })
+        .catch(function (err) { return { ok: false, error: err.message }; });
     });
-
-    return true; // async
   }
 
   /* Popup: stop/discard */
   if (msg.action === 'stop-session') {
-    if (session) {
-      var tabId = session.tabId;
-      resetSession();
-      chrome.tabs.sendMessage(tabId, { action: 'session-reset' }).catch(function () {});
-    }
-    sendResponse({ ok: true });
-    return true;
+    return getSession().then(function (s) {
+      if (!s) return { ok: true };
+      return clearAll().then(function () {
+        chrome.tabs.sendMessage(s.tabId, { action: 'session-reset' }).catch(function () {});
+        return { ok: true };
+      });
+    });
   }
 
   /* Content script: first click captured */
   if (msg.action === 'first-click-captured') {
-    if (!session || session.testType !== 'first-click') return;
-    var s = session;
-    resetSession();
-
-    var data = {
-      schemaVersion: 1,
-      sessionId: s.sessionId,
-      testerName: s.testerName,
-      sessionStart: s.sessionStart,
-      click: {
-        wallMs: msg.click.wallMs,
-        perfMs: msg.click.perfMs,
-        timeToClickMs: msg.click.wallMs - s.sessionStart.wallMs,
-        x: msg.click.x,
-        y: msg.click.y,
-        xPct: msg.click.xPct,
-        yPct: msg.click.yPct,
-        viewportW: msg.click.viewportW,
-        viewportH: msg.click.viewportH,
-        targetSelector: msg.click.targetSelector,
-        targetText: msg.click.targetText
-      },
-      screenshot: {
-        dataURI: s.screenshotDataUrl,
-        width: msg.click.viewportW,
-        height: msg.click.viewportH,
-        dpr: 1
-      }
-    };
-    saveSession(data, s.pageName);
-    sendResponse({ ok: true });
-    return true;
+    return getSession().then(function (s) {
+      if (!s || s.testType !== 'first-click') return { ok: false };
+      return getShot().then(function (shot) {
+        return clearAll().then(function () {
+          var data = {
+            schemaVersion: 1,
+            sessionId: s.sessionId,
+            testerName: s.testerName,
+            sessionStart: s.sessionStart,
+            click: {
+              wallMs: msg.click.wallMs,
+              perfMs: msg.click.perfMs,
+              timeToClickMs: msg.click.wallMs - s.sessionStart.wallMs,
+              x: msg.click.x,
+              y: msg.click.y,
+              xPct: msg.click.xPct,
+              yPct: msg.click.yPct,
+              viewportW: msg.click.viewportW,
+              viewportH: msg.click.viewportH,
+              targetSelector: msg.click.targetSelector,
+              targetText: msg.click.targetText
+            },
+            screenshot: {
+              dataURI: shot,
+              width: msg.click.viewportW,
+              height: msg.click.viewportH,
+              dpr: 1
+            }
+          };
+          saveSession(data, s.pageName);
+          return { ok: true };
+        });
+      });
+    });
   }
 
   /* Content script: exploratory click */
   if (msg.action === 'exploratory-click') {
-    if (!session || session.testType !== 'exploratory') return;
-    session.exploratoryClicks.push(msg.click);
-    sendResponse({ ok: true });
-    return true;
+    return getSession().then(function (s) {
+      if (!s || s.testType !== 'exploratory') return { ok: false };
+      s.exploratoryClicks.push(msg.click);
+      return putSession(s).then(function () { return { ok: true }; });
+    });
   }
 
   /* Content script: exploratory session ended */
   if (msg.action === 'exploratory-end') {
-    if (!session || session.testType !== 'exploratory') return;
-    var s = session;
-    resetSession();
-
-    var endWallMs = msg.endWallMs || Date.now();
-    var endPerfMs = msg.endPerfMs || 0;
-    var data = {
-      schemaVersion: 1,
-      testType: 'exploratory',
-      sessionId: s.sessionId,
-      testerName: s.testerName,
-      sessionStart: s.sessionStart,
-      sessionEnd: {
-        wallMs: endWallMs,
-        perfMs: endPerfMs,
-        durationMs: endWallMs - s.sessionStart.wallMs
-      },
-      clicks: s.exploratoryClicks,
-      screenshot: {
-        dataURI: s.screenshotDataUrl,
-        width: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportW) || 0,
-        height: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportH) || 0,
-        dpr: 1
-      }
-    };
-    saveSession(data, s.pageName);
-    sendResponse({ ok: true });
-    return true;
+    return getSession().then(function (s) {
+      if (!s || s.testType !== 'exploratory') return { ok: false };
+      return getShot().then(function (shot) {
+        return clearAll().then(function () {
+          var endWallMs = msg.endWallMs || Date.now();
+          var endPerfMs = msg.endPerfMs || 0;
+          var data = {
+            schemaVersion: 1,
+            testType: 'exploratory',
+            sessionId: s.sessionId,
+            testerName: s.testerName,
+            sessionStart: s.sessionStart,
+            sessionEnd: {
+              wallMs: endWallMs,
+              perfMs: endPerfMs,
+              durationMs: endWallMs - s.sessionStart.wallMs
+            },
+            clicks: s.exploratoryClicks,
+            screenshot: {
+              dataURI: shot,
+              width: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportW) || 0,
+              height: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportH) || 0,
+              dpr: 1
+            }
+          };
+          saveSession(data, s.pageName);
+          return { ok: true };
+        });
+      });
+    });
   }
+
+  return Promise.resolve(undefined);
+}
+
+chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+  handleMessage(msg).then(sendResponse, function () { sendResponse(undefined); });
+  return true; // keep the message channel open for the async response
 });
 
 /* ---- Re-arm when the session tab finishes loading a new page ---- */
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
-  if (!session || session.tabId !== tabId) return;
   if (changeInfo.status !== 'complete') return;
-  // The manifest auto-injects content.js on the new page; make sure it is
-  // there, then re-arm so the listener / End button come back.
-  ensureContentScript(tabId).then(rearmAfterNavigation);
+  getSession().then(function (s) {
+    if (!s || s.tabId !== tabId) return;
+    ensureContentScript(tabId).then(rearmAfterNavigation);
+  });
 });
 
 /* ---- Clean up if the session tab is closed ---- */
 chrome.tabs.onRemoved.addListener(function (tabId) {
-  if (session && session.tabId === tabId) {
-    resetSession();
-  }
+  getSession().then(function (s) {
+    if (s && s.tabId === tabId) clearAll();
+  });
 });
