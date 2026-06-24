@@ -157,15 +157,29 @@
     font-size: 12px; font-weight: 700; line-height: 22px; text-align: center;
     box-shadow: 0 1px 5px rgba(0,0,0,0.35); border: 2px solid #fff;
   }
-  #path-overlay {
+  .path-overlay {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     pointer-events: none; z-index: 5;
   }
-  #path-overlay .path-line {
+  .path-overlay .path-line {
     fill: none; stroke: #1565c0; stroke-width: 2;
     stroke-dasharray: 4 3; opacity: 0.6;
     vector-effect: non-scaling-stroke;
   }
+
+  /* Multi-page exploratory: one panel per page the tester visited */
+  #pages { display: none; }
+  .page-block { margin-bottom: 28px; }
+  .page-label {
+    font-size: 13px; font-weight: 700; color: #555;
+    margin-bottom: 8px;
+  }
+  .shot-wrap {
+    position: relative; display: inline-block; max-width: 100%;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.12); border-radius: 4px;
+    overflow: hidden; background: #eee;
+  }
+  .shot-img { display: block; max-width: 100%; height: auto; }
 
   /* Tooltip */
   .tooltip {
@@ -218,6 +232,7 @@
       <div id="screenshot-wrap">
         <img id="screenshot-img" alt="Prototype screenshot">
       </div>
+      <div id="pages"></div>
       <div id="viewer-empty" style="display:none">No screenshot available for this session.</div>
     </div>
   </div>
@@ -466,6 +481,12 @@
           clicks: session.clicks,
           screenshot: session.screenshot
         };
+        // Multi-page sessions also sign the per-page screenshot list. Older
+        // files were signed without it, so only include it when present to
+        // keep both shapes verifying.
+        if (session.screenshots !== undefined) {
+          data.screenshots = session.screenshots;
+        }
       } else {
         data = {
           schemaVersion: session.schemaVersion,
@@ -537,14 +558,36 @@
 
   /* ---- Viewer rendering ---- */
   function renderViewer() {
-    // Clear existing hotspots + any exploratory path overlay
-    var existing = screenshotWrap.querySelectorAll('.hotspot, #path-overlay');
+    // Clear existing hotspots + path overlay from the single wrap, and reset
+    // the multi-page container.
+    var existing = screenshotWrap.querySelectorAll('.hotspot, .path-overlay');
     existing.forEach(function (el) { el.parentNode.removeChild(el); });
+    var pages = document.getElementById('pages');
+    pages.innerHTML = '';
+    pages.style.display = 'none';
+    screenshotWrap.style.display = '';
 
     var active = allSessions.filter(function (s) { return s.__id === activeSessionId; })[0];
     if (!active) return;
 
-    var screenshot = active.screenshot;
+    var isExploratory = (active.testType === 'exploratory' || !!active.clicks);
+    // Prefer the per-page list; fall back to the single screenshot for
+    // first-click sessions and older single-page files.
+    var shots = (active.screenshots && active.screenshots.length)
+      ? active.screenshots
+      : (active.screenshot ? [active.screenshot] : []);
+
+    // Multi-page exploratory: render one panel per visited page.
+    if (isExploratory && shots.length > 1) {
+      screenshotWrap.style.display = 'none';
+      document.getElementById('viewer-empty').style.display = 'none';
+      pages.style.display = 'block';
+      renderExploratoryPages(active, shots, pages);
+      return;
+    }
+
+    // Single-screenshot path (first-click, single-page exploratory, old files).
+    var screenshot = shots[0];
     if (!screenshot || !screenshot.dataURI) {
       screenshotImg.style.display = 'none';
       document.getElementById('viewer-empty').style.display = 'block';
@@ -555,7 +598,7 @@
     screenshotImg.style.display = 'block';
     screenshotImg.src = screenshot.dataURI;
 
-    if (active.testType === 'exploratory' || active.clicks) {
+    if (isExploratory) {
       // Exploratory: show only the active session's clicks as a numbered path.
       var clicks = active.clicks || [];
       if (clicks.length > 1) {
@@ -575,11 +618,52 @@
     }
   }
 
+  /* ---- Multi-page exploratory: one screenshot panel per visited page ----
+   * Click numbering stays global (Click #1, #2, … in chronological order)
+   * but each click is drawn on the page it actually happened on, and the
+   * connecting path is drawn per page. */
+  function renderExploratoryPages(active, shots, container) {
+    var clicks = active.clicks || [];
+    shots.forEach(function (shot, idx) {
+      var block = document.createElement('div');
+      block.className = 'page-block';
+
+      var label = document.createElement('div');
+      label.className = 'page-label';
+      label.textContent = 'Page ' + (idx + 1);
+      block.appendChild(label);
+
+      var wrap = document.createElement('div');
+      wrap.className = 'shot-wrap';
+
+      var img = document.createElement('img');
+      img.className = 'shot-img';
+      img.src = shot.dataURI;
+      wrap.appendChild(img);
+
+      var pageClicks = [];
+      clicks.forEach(function (c, i) {
+        var ci = (c.screenshotIndex == null) ? 0 : c.screenshotIndex;
+        if (ci === idx) pageClicks.push({ click: c, num: i + 1 });
+      });
+
+      if (pageClicks.length > 1) {
+        wrap.appendChild(createPathOverlay(pageClicks.map(function (p) { return p.click; })));
+      }
+      pageClicks.forEach(function (p) {
+        wrap.appendChild(createExploratoryHotspot(active, p.click, p.num));
+      });
+
+      block.appendChild(wrap);
+      container.appendChild(block);
+    });
+  }
+
   /* ---- Exploratory: connecting path between consecutive clicks ---- */
   function createPathOverlay(clicks) {
     var svgNS = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('id', 'path-overlay');
+    svg.setAttribute('class', 'path-overlay');
     svg.setAttribute('viewBox', '0 0 100 100');
     svg.setAttribute('preserveAspectRatio', 'none');
     var poly = document.createElementNS(svgNS, 'polyline');

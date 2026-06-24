@@ -23,13 +23,17 @@ function putSession(s) {
   var rec = {}; rec[STORE_KEY] = s;
   return chrome.storage.session.set(rec);
 }
-function getShot() {
+/* Screenshots are stored as an ARRAY of data URIs, one per page the tester
+ * visits during an exploratory session, so clicks made after an in-prototype
+ * navigation are shown on the page they actually happened on. First-click
+ * sessions only ever use a single-element array. */
+function getShots() {
   return chrome.storage.session.get(SHOT_KEY).then(function (o) {
-    return o[SHOT_KEY] || '';
+    return o[SHOT_KEY] || [];
   });
 }
-function putShot(dataUrl) {
-  var rec = {}; rec[SHOT_KEY] = dataUrl;
+function putShots(arr) {
+  var rec = {}; rec[SHOT_KEY] = arr;
   return chrome.storage.session.set(rec);
 }
 function clearAll() {
@@ -120,11 +124,36 @@ function sendArmed(s) {
 function rearmAfterNavigation() {
   return getSession().then(function (s) {
     if (!s) return;
-    var reshoot = (s.testType === 'first-click') || (s.exploratoryClicks.length === 0);
-    var step = reshoot
-      ? captureTab(s.tabId).then(putShot).catch(function () { /* keep old shot */ })
-      : Promise.resolve();
-    return step.then(function () { return sendArmed(s); });
+
+    var update;
+    if (s.testType === 'first-click') {
+      // The single click lands on the final page, so always keep one shot of
+      // the current page.
+      update = captureTab(s.tabId).then(function (shot) { return putShots([shot]); });
+    } else {
+      // Exploratory: capture the new page. Append it as a new page only if the
+      // page we just left actually received a click; otherwise (a splash/login
+      // redirect, or any page the tester passed through without clicking)
+      // replace the last shot so we don't accumulate empty pages.
+      update = captureTab(s.tabId).then(function (shot) {
+        return getShots().then(function (shots) {
+          if (shots.length === 0) {
+            shots = [shot];
+          } else {
+            var lastIndex = shots.length - 1;
+            var clickedLast = s.exploratoryClicks.some(function (c) {
+              return c.screenshotIndex === lastIndex;
+            });
+            if (clickedLast) shots.push(shot);
+            else shots[lastIndex] = shot;
+          }
+          return putShots(shots);
+        });
+      });
+    }
+
+    return update.catch(function () { /* keep old shots */ })
+      .then(function () { return sendArmed(s); });
   });
 }
 
@@ -179,7 +208,7 @@ function handleMessage(msg) {
                 sessionStart: { wallMs: Date.now(), perfMs: (resp && resp.perfMs) ? resp.perfMs : 0 },
                 exploratoryClicks: []
               };
-              return putShot(info.shot)
+              return putShots([info.shot])
                 .then(function () { return putSession(s); })
                 .then(function () { return sendArmed(s); })
                 .then(function () { return { ok: true }; });
@@ -204,7 +233,8 @@ function handleMessage(msg) {
   if (msg.action === 'first-click-captured') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'first-click') return { ok: false };
-      return getShot().then(function (shot) {
+      return getShots().then(function (shots) {
+        var shot = shots[0] || '';
         return clearAll().then(function () {
           var data = {
             schemaVersion: 1,
@@ -242,8 +272,14 @@ function handleMessage(msg) {
   if (msg.action === 'exploratory-click') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'exploratory') return { ok: false };
-      s.exploratoryClicks.push(msg.click);
-      return putSession(s).then(function () { return { ok: true }; });
+      return getShots().then(function (shots) {
+        // Tag the click with the page it happened on and its time offset, so
+        // the viewer can place it on the right screenshot and label it.
+        msg.click.screenshotIndex = shots.length > 0 ? shots.length - 1 : 0;
+        msg.click.timeSinceStartMs = msg.click.wallMs - s.sessionStart.wallMs;
+        s.exploratoryClicks.push(msg.click);
+        return putSession(s).then(function () { return { ok: true }; });
+      });
     });
   }
 
@@ -251,10 +287,34 @@ function handleMessage(msg) {
   if (msg.action === 'exploratory-end') {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'exploratory') return { ok: false };
-      return getShot().then(function (shot) {
+      return getShots().then(function (shots) {
         return clearAll().then(function () {
           var endWallMs = msg.endWallMs || Date.now();
           var endPerfMs = msg.endPerfMs || 0;
+          var clicks = s.exploratoryClicks;
+
+          // Build one screenshot object per visited page. Dimensions come from
+          // the first click recorded on that page (the viewer positions
+          // hotspots by percentage, so exact pixels aren't required).
+          function firstClickOnPage(idx) {
+            for (var i = 0; i < clicks.length; i++) {
+              if (clicks[i].screenshotIndex === idx) return clicks[i];
+            }
+            return null;
+          }
+          var screenshots = shots.map(function (dataURI, idx) {
+            var fc = firstClickOnPage(idx);
+            return {
+              dataURI: dataURI,
+              width: (fc && fc.viewportW) || 0,
+              height: (fc && fc.viewportH) || 0,
+              dpr: 1
+            };
+          });
+          if (screenshots.length === 0) {
+            screenshots = [{ dataURI: '', width: 0, height: 0, dpr: 1 }];
+          }
+
           var data = {
             schemaVersion: 1,
             testType: 'exploratory',
@@ -266,13 +326,11 @@ function handleMessage(msg) {
               perfMs: endPerfMs,
               durationMs: endWallMs - s.sessionStart.wallMs
             },
-            clicks: s.exploratoryClicks,
-            screenshot: {
-              dataURI: shot,
-              width: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportW) || 0,
-              height: (s.exploratoryClicks[0] && s.exploratoryClicks[0].viewportH) || 0,
-              dpr: 1
-            }
+            clicks: clicks,
+            // screenshot (singular) stays as the first page for any older
+            // viewer; screenshots (plural) is the full per-page list.
+            screenshot: screenshots[0],
+            screenshots: screenshots
           };
           saveSession(data, s.pageName);
           return { ok: true };
