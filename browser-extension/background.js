@@ -298,6 +298,15 @@ chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
   });
 });
 
+/* ---- Re-arm when the session tab finishes loading a new page ---- */
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+  if (!session || session.tabId !== tabId) return;
+  if (changeInfo.status !== 'complete') return;
+  // The manifest auto-injects content.js on the new page; make sure it is
+  // there, then re-arm so the listener / End button come back.
+  ensureContentScript(tabId).then(rearmAfterNavigation);
+});
+
 /* ---- Clean up if the session tab is closed ---- */
 chrome.tabs.onRemoved.addListener(function (tabId) {
   getSession().then(function (s) {
