@@ -258,38 +258,45 @@ function handleMessage(msg, sender) {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'first-click') return { ok: false };
       if (!fromSessionTab(s, sender)) return { ok: false };
-      return getShots().then(function (shots) {
-        var shot = shots[0] || '';
-        return clearAll().then(function () {
-          var data = {
-            schemaVersion: 1,
-            sessionId: s.sessionId,
-            testerName: s.testerName,
-            sessionStart: s.sessionStart,
-            click: {
-              wallMs: msg.click.wallMs,
-              perfMs: msg.click.perfMs,
-              timeToClickMs: msg.click.wallMs - s.sessionStart.wallMs,
-              x: msg.click.x,
-              y: msg.click.y,
-              xPct: msg.click.xPct,
-              yPct: msg.click.yPct,
-              viewportW: msg.click.viewportW,
-              viewportH: msg.click.viewportH,
-              targetSelector: msg.click.targetSelector,
-              targetText: msg.click.targetText
-            },
-            screenshot: {
-              dataURI: shot,
-              width: msg.click.viewportW,
-              height: msg.click.viewportH,
-              dpr: 1
-            }
-          };
-          saveSession(data, s.pageName);
-          return { ok: true };
+      // Re-capture the screenshot at click time so the viewport scroll position
+      // in the image always matches e.clientX/Y, even if the tester scrolled
+      // after starting the session. Falls back to the session-start shot if
+      // the tab is no longer active (e.g. popup was clicked in between).
+      return captureTab(s.tabId).catch(function () { return null; })
+        .then(function (freshShot) {
+          return (freshShot ? Promise.resolve(freshShot) : getShots().then(function (shots) { return shots[0] || ''; }));
+        })
+        .then(function (shot) {
+          return clearAll().then(function () {
+            var data = {
+              schemaVersion: 1,
+              sessionId: s.sessionId,
+              testerName: s.testerName,
+              sessionStart: s.sessionStart,
+              click: {
+                wallMs: msg.click.wallMs,
+                perfMs: msg.click.perfMs,
+                timeToClickMs: msg.click.wallMs - s.sessionStart.wallMs,
+                x: msg.click.x,
+                y: msg.click.y,
+                xPct: msg.click.xPct,
+                yPct: msg.click.yPct,
+                viewportW: msg.click.viewportW,
+                viewportH: msg.click.viewportH,
+                targetSelector: msg.click.targetSelector,
+                targetText: msg.click.targetText
+              },
+              screenshot: {
+                dataURI: shot,
+                width: msg.click.viewportW,
+                height: msg.click.viewportH,
+                dpr: 1
+              }
+            };
+            saveSession(data, s.pageName);
+            return { ok: true };
+          });
         });
-      });
     });
   }
 
