@@ -305,14 +305,29 @@ function handleMessage(msg, sender) {
     return getSession().then(function (s) {
       if (!s || s.testType !== 'exploratory') return { ok: false };
       if (!fromSessionTab(s, sender)) return { ok: false };
-      return getShots().then(function (shots) {
-        // Tag the click with the page it happened on and its time offset, so
-        // the viewer can place it on the right screenshot and label it.
-        msg.click.screenshotIndex = shots.length > 0 ? shots.length - 1 : 0;
-        msg.click.timeSinceStartMs = msg.click.wallMs - s.sessionStart.wallMs;
-        s.exploratoryClicks.push(msg.click);
-        return putSession(s).then(function () { return { ok: true }; });
-      });
+      // Capture a fresh screenshot at click time so the dot is always aligned
+      // with the viewport scroll position when the click happened. Each click
+      // gets its own screenshot entry; falls back to the existing last shot if
+      // the tab is not active (e.g. lost focus).
+      return captureTab(s.tabId).catch(function () { return null; })
+        .then(function (freshShot) {
+          return getShots().then(function (shots) {
+            var idx;
+            if (freshShot) {
+              shots = shots.slice(); // don't mutate the stored reference
+              shots.push(freshShot);
+              idx = shots.length - 1;
+            } else {
+              idx = shots.length > 0 ? shots.length - 1 : 0;
+            }
+            msg.click.screenshotIndex = idx;
+            msg.click.timeSinceStartMs = msg.click.wallMs - s.sessionStart.wallMs;
+            s.exploratoryClicks.push(msg.click);
+            var saves = [putSession(s)];
+            if (freshShot) saves.push(putShots(shots));
+            return Promise.all(saves).then(function () { return { ok: true }; });
+          });
+        });
     });
   }
 
@@ -327,24 +342,34 @@ function handleMessage(msg, sender) {
           var endPerfMs = msg.endPerfMs || 0;
           var clicks = s.exploratoryClicks;
 
-          // Build one screenshot object per visited page. Dimensions come from
-          // the first click recorded on that page (the viewer positions
-          // hotspots by percentage, so exact pixels aren't required).
-          function firstClickOnPage(idx) {
-            for (var i = 0; i < clicks.length; i++) {
-              if (clicks[i].screenshotIndex === idx) return clicks[i];
-            }
-            return null;
-          }
-          var screenshots = shots.map(function (dataURI, idx) {
-            var fc = firstClickOnPage(idx);
-            return {
+          // Each click now has its own per-click screenshot (captured at click
+          // time for scroll alignment). Navigation-only shots (no click points
+          // to them) are orphans — filter them out and remap click indices to
+          // keep the output compact. Dimensions come from the associated click.
+          var usedIndices = {};
+          clicks.forEach(function (c) { usedIndices[c.screenshotIndex] = true; });
+
+          var oldToNew = {};
+          var screenshots = [];
+          shots.forEach(function (dataURI, oldIdx) {
+            if (!usedIndices[oldIdx]) return; // orphaned navigation shot
+            var newIdx = screenshots.length;
+            oldToNew[oldIdx] = newIdx;
+            var click = clicks.filter(function (c) { return c.screenshotIndex === oldIdx; })[0];
+            screenshots.push({
               dataURI: dataURI,
-              width: (fc && fc.viewportW) || 0,
-              height: (fc && fc.viewportH) || 0,
+              width: (click && click.viewportW) || 0,
+              height: (click && click.viewportH) || 0,
               dpr: 1
-            };
+            });
           });
+
+          // Remap click screenshotIndex values to the compacted array.
+          clicks.forEach(function (c) {
+            c.screenshotIndex = oldToNew[c.screenshotIndex] !== undefined
+              ? oldToNew[c.screenshotIndex] : 0;
+          });
+
           if (screenshots.length === 0) {
             screenshots = [{ dataURI: '', width: 0, height: 0, dpr: 1 }];
           }
