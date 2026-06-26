@@ -64,6 +64,23 @@
     return e.button === 0 || e.button === undefined;
   }
 
+  /* ---- Snackbar notification ---- */
+  function showSnackbar(message) {
+    var bar = document.createElement('div');
+    bar.setAttribute('style', [
+      'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
+      'z-index:2147483647', 'padding:12px 20px', 'font-size:14px', 'font-weight:600',
+      'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+      'color:#fff', 'background:#1a8040', 'border-radius:8px',
+      'box-shadow:0 4px 14px rgba(0,0,0,0.3)',
+      'transition:opacity 0.4s ease', 'opacity:1', 'pointer-events:none'
+    ].join(';'));
+    bar.textContent = message;
+    (document.documentElement || document.body).appendChild(bar);
+    setTimeout(function () { bar.style.opacity = '0'; }, 2000);
+    setTimeout(function () { if (bar.parentNode) bar.parentNode.removeChild(bar); }, 2500);
+  }
+
   /* ---- Top frame: deliver a finished payload to the background ----
    * For first-click, keep listening until the background confirms it saved:
    * the service worker may be cold-started by this very message and drop it,
@@ -79,6 +96,7 @@
           return;
         }
         armed = false; // captured; stop accepting clicks from any frame
+        showSnackbar('✓ First click captured successfully');
       }
     );
   }
