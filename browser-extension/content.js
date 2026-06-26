@@ -66,11 +66,19 @@
 
   /* ---- Snackbar notification ---- */
   function showSnackbar(message) {
+    // Inject Work Sans from Google Fonts if not already loaded.
+    if (!document.getElementById('__fct_worksans__')) {
+      var link = document.createElement('link');
+      link.id = '__fct_worksans__';
+      link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=Work+Sans:wght@600&display=swap';
+      (document.head || document.documentElement).appendChild(link);
+    }
     var bar = document.createElement('div');
     bar.setAttribute('style', [
       'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
       'z-index:2147483647', 'padding:12px 20px', 'font-size:14px', 'font-weight:600',
-      'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+      'font-family:Work Sans,sans-serif',
       'color:#fff', 'background:#1a8040', 'border-radius:8px',
       'box-shadow:0 4px 14px rgba(0,0,0,0.3)',
       'transition:opacity 0.4s ease', 'opacity:1', 'pointer-events:none'
