@@ -84,7 +84,6 @@
       'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
       'text-transform:uppercase',
       'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
-      'box-shadow:6px 6px 0 #E5322B',
       'transition:opacity 0.4s ease', 'opacity:1', 'pointer-events:none'
     ].join(';'));
     bar.textContent = message;
@@ -213,7 +212,7 @@
       'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
       'text-transform:uppercase',
       'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
-      'box-shadow:6px 6px 0 #E5322B', 'cursor:pointer'
+      'cursor:pointer'
     ].join(';'));
     btn.addEventListener('click', function (ev) {
       ev.preventDefault();
@@ -221,7 +220,6 @@
       btn.disabled = true;
       btn.textContent = 'Saving...';
       btn.style.background = '#444';
-      btn.style.boxShadow = '6px 6px 0 #444';
       btn.style.cursor = 'default';
       armed = false; // stop recording while the save is in flight
       chrome.runtime.sendMessage(
@@ -235,7 +233,6 @@
             btn.disabled = false;
             btn.textContent = 'I think I completed the task ✓';
             btn.style.background = '#000';
-            btn.style.boxShadow = '6px 6px 0 #E5322B';
             btn.style.cursor = 'pointer';
             return;
           }
