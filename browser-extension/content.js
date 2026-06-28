@@ -64,23 +64,27 @@
     return e.button === 0 || e.button === undefined;
   }
 
+  /* ---- Load Work Sans (600 + 700) from Google Fonts once ---- */
+  function ensureFont() {
+    if (document.getElementById('__fct_worksans__')) return;
+    var link = document.createElement('link');
+    link.id = '__fct_worksans__';
+    link.rel = 'stylesheet';
+    link.href = 'https://fonts.googleapis.com/css2?family=Work+Sans:wght@600;700&display=swap';
+    (document.head || document.documentElement).appendChild(link);
+  }
+
   /* ---- Snackbar notification ---- */
   function showSnackbar(message) {
-    // Inject Work Sans from Google Fonts if not already loaded.
-    if (!document.getElementById('__fct_worksans__')) {
-      var link = document.createElement('link');
-      link.id = '__fct_worksans__';
-      link.rel = 'stylesheet';
-      link.href = 'https://fonts.googleapis.com/css2?family=Work+Sans:wght@600&display=swap';
-      (document.head || document.documentElement).appendChild(link);
-    }
+    ensureFont();
     var bar = document.createElement('div');
     bar.setAttribute('style', [
       'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
-      'z-index:2147483647', 'padding:12px 20px', 'font-size:14px', 'font-weight:600',
-      'font-family:Work Sans,sans-serif',
-      'color:#fff', 'background:#1a8040', 'border-radius:8px',
-      'box-shadow:0 4px 14px rgba(0,0,0,0.3)',
+      'z-index:2147483647', 'padding:14px 22px', 'font-size:14px', 'font-weight:700',
+      'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
+      'text-transform:uppercase',
+      'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
+      'box-shadow:6px 6px 0 #1a8040',
       'transition:opacity 0.4s ease', 'opacity:1', 'pointer-events:none'
     ].join(';'));
     bar.textContent = message;
@@ -202,19 +206,22 @@
     btn.id = END_BTN_ID;
     btn.type = 'button';
     btn.textContent = 'I think I completed the task ✓';
+    ensureFont();
     btn.setAttribute('style', [
       'position:fixed', 'top:16px', 'right:16px', 'z-index:2147483647',
-      'padding:10px 16px', 'font-size:13px', 'font-weight:700',
-      'font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
-      'color:#fff', 'background:#1a8040', 'border:none', 'border-radius:8px',
-      'box-shadow:0 4px 14px rgba(0,0,0,0.3)', 'cursor:pointer'
+      'padding:12px 18px', 'font-size:13px', 'font-weight:700',
+      'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
+      'text-transform:uppercase',
+      'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
+      'box-shadow:6px 6px 0 #1a8040', 'cursor:pointer'
     ].join(';'));
     btn.addEventListener('click', function (ev) {
       ev.preventDefault();
       ev.stopPropagation();
       btn.disabled = true;
       btn.textContent = 'Saving...';
-      btn.style.background = '#888';
+      btn.style.background = '#444';
+      btn.style.boxShadow = '6px 6px 0 #444';
       btn.style.cursor = 'default';
       armed = false; // stop recording while the save is in flight
       chrome.runtime.sendMessage(
@@ -227,7 +234,8 @@
             armed = true;
             btn.disabled = false;
             btn.textContent = 'I think I completed the task ✓';
-            btn.style.background = '#1a8040';
+            btn.style.background = '#000';
+            btn.style.boxShadow = '6px 6px 0 #1a8040';
             btn.style.cursor = 'pointer';
             return;
           }
