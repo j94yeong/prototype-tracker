@@ -84,7 +84,7 @@
       'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
       'text-transform:uppercase',
       'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
-      'box-shadow:6px 6px 0 #1a8040',
+      'box-shadow:6px 6px 0 #E5322B',
       'transition:opacity 0.4s ease', 'opacity:1', 'pointer-events:none'
     ].join(';'));
     bar.textContent = message;
@@ -213,7 +213,7 @@
       'font-family:Work Sans,sans-serif', 'letter-spacing:0.02em',
       'text-transform:uppercase',
       'color:#fff', 'background:#000', 'border:2px solid #fff', 'border-radius:0',
-      'box-shadow:6px 6px 0 #1a8040', 'cursor:pointer'
+      'box-shadow:6px 6px 0 #E5322B', 'cursor:pointer'
     ].join(';'));
     btn.addEventListener('click', function (ev) {
       ev.preventDefault();
@@ -235,7 +235,7 @@
             btn.disabled = false;
             btn.textContent = 'I think I completed the task ✓';
             btn.style.background = '#000';
-            btn.style.boxShadow = '6px 6px 0 #1a8040';
+            btn.style.boxShadow = '6px 6px 0 #E5322B';
             btn.style.cursor = 'pointer';
             return;
           }
